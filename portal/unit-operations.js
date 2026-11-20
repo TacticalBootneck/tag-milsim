@@ -4,7 +4,8 @@ const tabs=document.querySelector('#unit-tabs');
 const status=document.querySelector('#unit-status');
 const content=document.querySelector('#unit-content');
 const query=new URLSearchParams(location.search);
-const view=query.get('view')||'orders';
+const requestedView=query.get('view')||'orders';
+const view=requestedView==='honours'&&query.has('nomination')?'honours-review':requestedView;
 const uk=['en-GB',{timeZone:'Europe/London',dateStyle:'medium',timeStyle:'short'}];
 const day=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/London',dateStyle:'short'});
 const marks={
@@ -13,7 +14,7 @@ const marks={
 const outcomes={passed:'Passed',retest:'Needs retest',failed:'Failed',repeat:'Needs retest',absent:'Absent',draft:'Draft'};
 const views={orders:'Orders & readiness',taskings:'Taskings',applications:'Apply for a qualification',progress:'My attendance & rewards',
   courses:'Courses',training:'Schedule training',records:'Candidate records',attendance:'Attendance & sign-off',gm:'Game Master briefs',command:'Command inbox',
-  honours:'Honours'};
+  honours:'Recommend someone for an honour','honours-review':'Review honours','application-review':'Review applications'};
 const specialties={t1:'Basic Training Cadre T1',t2:'Basic Training Cadre T2',heavy:'Heavy Weapons Training Cadre',tacp:'TACP Training Cadre',
   dog:'Dog Handler Training Cadre',sniper:'Sniper Training Cadre',pilot:'Pilot Training Cadre',medical:'Medical Training Cadre',
   leadership:'Leadership Training Cadre',devgru:'DEVGRU Training Cadre',rrc:'RRC Training Cadre',seasoned:'Seasoned Member',gm:'Game Master'};
@@ -703,18 +704,21 @@ function bulkResults(parent,event) {
 }
 
 function applications() {
-  heading(content,'Apply for a qualification');
-  line(content,'Seasoned Member',data.seasoned?'Earned':Math.min(10,data.operations??0)+' of 10 operations after probation');
-  const available=(data.qualifications??[]).filter(row=>!row.seasoned||data.seasoned);
-  if (available.length) {
-    const editor=form(card(content,'New application'));
-    const qualification=field(editor,'Qualification',{choices:[['','Choose a qualification'],...available.map(row=>[row.key,row.name])],required:true});
-    const note=field(editor,'Why are you applying?',{type:'textarea',required:true,limit:1800});
-    submit(editor,'Submit application',()=>({action:'application',qualification:qualification.value,note:note.value}),
-      'Application submitted. Discord notification queued.');
-  } else content.append(el('p','No qualifications are currently open to you.'));
-  const locked=(data.qualifications??[]).filter(item=>item.seasoned&&!data.seasoned);
-  if (locked.length) line(content,'Unlocks at Seasoned Member',locked.map(item=>item.name).join(', '));
+  if (view==='applications') {
+    heading(content,'Apply for a qualification');
+    line(content,'Seasoned Member',data.seasoned?'Earned':Math.min(10,data.operations??0)+' of 10 operations after probation');
+    const available=(data.qualifications??[]).filter(row=>!row.seasoned||data.seasoned);
+    if (available.length) {
+      const editor=form(card(content,'New application'));
+      const qualification=field(editor,'Qualification',{choices:[['','Choose a qualification'],...available.map(row=>[row.key,row.name])],required:true});
+      const note=field(editor,'Why are you applying?',{type:'textarea',required:true,limit:1800});
+      submit(editor,'Submit application',()=>({action:'application',qualification:qualification.value,note:note.value}),
+        'Application submitted. Discord notification queued.');
+    } else content.append(el('p','No qualifications are currently open to you.'));
+    const locked=(data.qualifications??[]).filter(item=>item.seasoned&&!data.seasoned);
+    if (locked.length) line(content,'Unlocks at Seasoned Member',locked.map(item=>item.name).join(', '));
+  }
+  if (view==='application-review' && !data.applications?.length) content.append(el('p','No applications are available to review.'));
   for (const item of (data.applications??[]).toSorted((a,b)=>b.at-a.at)) {
     const box=card(content,item.qualificationName+' · '+item.status,true);
     line(box,'Candidate',item.name);
@@ -784,10 +788,10 @@ function progress() {
 }
 function command() {
   const box=card(content,'Needs attention');
-  actions(box,link(data.inbox.applications+' pending applications',unitLink('applications')),
+  actions(box,link(data.inbox.applications+' pending applications',unitLink('application-review')),
     link(data.inbox.taskings+' overdue tasking AARs',unitLink('taskings')),
     link(data.inbox.overdue.length+' overdue follow-ups',unitLink('orders')),
-    link(data.inbox.vacancies.length+' roster vacancies','/staff/#assignments'));
+    link(data.inbox.vacancies.length+' roster vacancies','/staff/administration/tools/?tool=assignments'));
   if (data.inbox.overdue.length) for (const row of data.inbox.overdue) line(box,row.title,row.due);
   const management=card(content,'Attendance cases');
   for (const item of data.cases) {
@@ -996,23 +1000,26 @@ function honoursView() {
   const catalogue=data.honours??[];
   const title=key=>catalogue.find(item=>item.key===key)?.title??'Honour';
   const choices=catalogue.map(item=>[item.key,item.title]);
-  const section=card(content,'Recommend a member for honours');
-  const nomination=form(section);
-  const nominee=field(nomination,'Member',{required:true,choices:[['','Choose a member'],...(data.nominees??[]).map(item=>[item.id,item.name])]});
-  const award=field(nomination,'Suggested honour',{required:true,choices:[['','Choose an honour'],...choices]});
-  const criteria=el('p');
-  award.onchange=()=>{criteria.textContent=catalogue.find(item=>item.key===award.value)?.criteria??'';};
-  nomination.append(criteria);
-  const operation=field(nomination,'Main operation',{choices:[['','General contribution'],...(data.operations??[]).map(item=>[item.key,eventText(item)])]});
-  const detail=field(nomination,'What did they do, and what difference did it make?',{type:'textarea',required:true,limit:3000});
-  const evidence=field(nomination,'Witness or clip link (optional)',{limit:600});
-  const nominationId=crypto.randomUUID();
-  actions(nomination,button('Send recommendation',null,'submit'));
-  nomination.onsubmit=event=>{
-    event.preventDefault();
-    void save(()=>({action:'honour-nomination',id:nominationId,member:nominee.value,award:award.value,event:operation.value,
-      detail:detail.value,evidence:evidence.value}),'Recommendation sent to TAG Commander for review.');
-  };
+  if (view==='honours') {
+    const section=card(content,'Recommend a member for honours');
+    const nomination=form(section);
+    const nominee=field(nomination,'Member',{required:true,choices:[['','Choose a member'],...(data.nominees??[]).map(item=>[item.id,item.name])]});
+    const award=field(nomination,'Suggested honour',{required:true,choices:[['','Choose an honour'],...choices]});
+    const criteria=el('p');
+    award.onchange=()=>{criteria.textContent=catalogue.find(item=>item.key===award.value)?.criteria??'';};
+    nomination.append(criteria);
+    const operation=field(nomination,'Main operation',{choices:[['','General contribution'],...(data.operations??[]).map(item=>[item.key,eventText(item)])]});
+    const detail=field(nomination,'What did they do, and what difference did it make?',{type:'textarea',required:true,limit:3000});
+    const evidence=field(nomination,'Witness or clip link (optional)',{limit:600});
+    const nominationId=crypto.randomUUID();
+    actions(nomination,button('Send recommendation',null,'submit'));
+    nomination.onsubmit=event=>{
+      event.preventDefault();
+      void save(()=>({action:'honour-nomination',id:nominationId,member:nominee.value,award:award.value,event:operation.value,
+        detail:detail.value,evidence:evidence.value}),'Recommendation sent to TAG Commander for review.');
+    };
+    return;
+  }
   if (!data.honoursReview) return;
   const review=card(content,'Honours review');
   const nominations=data.nominations??[];
@@ -1046,17 +1053,22 @@ function honoursView() {
 
 function render() {
   content.replaceChildren();
-  tabs.replaceChildren(...data.views.map(key=>{
-    const tab=link(views[key],unitLink(key));
-    tab.className='button outline small';
-    if (key===view) tab.setAttribute('aria-current','page');
-    return tab;
-  }));
+  const pageTitle=document.querySelector('#unit-title');
+  if (pageTitle) pageTitle.textContent=views[view]??'Unit operations';
+  const section=['training','courses','records','attendance','application-review'].includes(view)?'training'
+    : ['command','honours-review'].includes(view)?'administration'
+      : ['taskings','orders','gm'].includes(view)?'operations':null;
+  const {command:isCommand,cadre,leader,gameMaster,reviews,honours}=data.access;
+  const canReturn=section==='training'?(isCommand||cadre||leader||reviews)
+    : section==='operations'?(isCommand||cadre||leader||gameMaster)
+      : section==='administration'?(isCommand||honours):false;
+  tabs.replaceChildren(...(canReturn?[link({training:'Training',operations:'Operations',administration:'Administration'}[section],'/staff/'+section+'/')]:[]));
   if (!data.views.includes(view)) {
     content.append(el('p','This area is unavailable for your roles.'));
     return;
   }
-  const routes={orders,taskings,applications,progress,courses:candidateRecords,records:candidateRecords,training:trainingSchedule,attendance,gm,command,honours:honoursView};
+  const routes={orders,taskings,applications,progress,courses:candidateRecords,records:candidateRecords,training:trainingSchedule,attendance,gm,command,
+    honours:honoursView,'honours-review':honoursView,'application-review':applications};
   routes[view]();
 }
 async function load() {

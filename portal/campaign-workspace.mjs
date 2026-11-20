@@ -425,5 +425,6 @@ export function createCampaignWorkspace({dataDir, origin, requestDiscord, mediaS
       canAar:Boolean(state.active&&member&&permissions(state,member,false).length)};
   }
   return {handle,serveImage,deliver,deliverImages,unitContext,publicEntries:() => read().updates,
+    roleSettings:() => read().roles,
     awardWindows:() => read().campaigns.map(({id,title,createdAt,archivedAt})=>({id,title,createdAt,archivedAt}))};
 }

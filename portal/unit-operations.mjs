@@ -171,6 +171,12 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
       : entry.specialty && has(instructors[entry.specialty])));
     return {command,leader,cadre,gameMaster,assign,review:entry=>command || has(entry?.reviewer) || assign(entry)};
   }
+  function dashboardAccess(state,member,roles) {
+    const {command,cadre,leader,gameMaster}=permissions(state,member,{roles});
+    const reviews=command || cadre || Object.values(state.settings.qualifications).some(entry=>
+      entry.reviewer && member.roles.includes(entry.reviewer));
+    return {command,cadre,leader,gameMaster,reviews,honours:member.roles.includes(commanderRole)};
+  }
   function needEvent(ctx,key) {
     check(typeof key==='string' && eventKeys.test(key) && ctx.events[key] && !ctx.events[key].cancelled,'Choose an available event.',404);
     return ctx.events[key];
@@ -292,12 +298,14 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
     const protectedAssessments=Object.values(state.assessments).filter(item=>item.member!==self &&
       ((access.cadre && access.assign(qualification(state,item.qualification,ctx))) || (access.leader || access.cadre) && item.status!=='draft'));
     const memberCase=state.cases[self];
-    const payload={access:{command:access.command,leader:access.leader,cadre:access.cadre,gameMaster:access.gameMaster},
-      views:['orders','taskings','applications','progress','honours',...(access.leader?['records']:[]),...(access.cadre?['courses','records']:access.command?['courses']:[]),
-        ...(access.command||access.cadre?['training','attendance']:[]),...(access.command||access.gameMaster?['gm']:[]),...(access.command?['command']:[])],
+    const navigation=dashboardAccess(state,member,ctx.roles);
+    const payload={access:navigation,
+      views:[...new Set(['orders','taskings','applications','progress','honours',...(access.leader?['records']:[]),...(access.cadre?['courses','records']:access.command?['courses']:[]),
+        ...(canStaff?['training','attendance']:[]),...(access.command||access.gameMaster?['gm']:[]),...(access.command?['command']:[]),
+        ...(navigation.reviews?['application-review']:[]),...(navigation.honours?['honours-review']:[])])],
       member:member.user.id};
-    if (view==='honours') {
-      const commander = member.roles.includes(commanderRole);
+    if (view==='honours' || view==='honours-review' && navigation.honours) {
+      const commander = view==='honours-review';
       payload.honours = Object.entries(honours).map(([key,value])=>({key,...value,image:ribbonUrl(key)}));
       payload.nominees = Object.values(ctx.members).filter(person=>person.id!==self)
         .map(({id,name})=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name));
@@ -362,13 +370,15 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
       payload.canAar=ctx.canAar;
       payload.canViewCampaign=Boolean(ctx.campaign);
     }
-    if (view==='applications') {
+    if (view==='applications' || view==='application-review' && navigation.reviews) {
+      const reviewing=view==='application-review';
       const ops=seasoned(state,ctx,self);
       payload.seasoned=seasonedEligible(state,ctx,self,member.roles);
       payload.operations=ops;
       payload.qualifications=all.filter(item=>item.applications).map(({key,name,seasoned})=>({key,name,seasoned}));
-      payload.applications=Object.values(state.applications).filter(item=>item.member===self || access.review(qualification(state,item.qualification,ctx)))
-        .map(item=>({...item,canReview:item.member!==self&&access.review(qualification(state,item.qualification,ctx)),
+      payload.applications=Object.values(state.applications).filter(item=>reviewing
+        ? item.member!==self && access.review(qualification(state,item.qualification,ctx)) : item.member===self)
+        .map(item=>({...item,canReview:reviewing,
           name:ctx.members[item.member]?.name ?? 'Former member',qualificationName:qualification(state,item.qualification,ctx)?.name ?? item.qualification}));
     }
     if (view==='progress') {
@@ -504,7 +514,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
           detail,evidence:str(input.evidence,'Witness or clip',600,false),submittedAt:now(),status:'pending'};
         for (const commander of commanders) {
           notice(state,'honour:'+key+':'+commander.id,'A TAG member has been recommended for an honour. Review it privately: '+
-            link('honours')+'&nomination='+key,'member',commander.id,commanderRole);
+            link('honours-review')+'&nomination='+key,'member',commander.id,commanderRole);
         }
         return {id:key};
       }
@@ -922,11 +932,11 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         const entry={id:randomUUID(),member:actor,qualification:qualificationKey,status:'pending',
           note:str(input.note,'Application statement',1800),at:now()};
         state.applications[entry.id]=entry;
-        notice(state,'application:'+entry.id,'A qualification application is waiting for review. '+link('applications'));
+        notice(state,'application:'+entry.id,'A qualification application is waiting for review. '+link('application-review'));
         const reviewer=qual.reviewer||state.settings.roles[qual.specialty];
         if (reviewer) for (const person of Object.values(ctx.members)) {
           if (person.id!==actor && person.roleIds?.includes(reviewer)) notice(state,'application-review:'+entry.id+':'+person.id,
-            'A '+qual.name+' application is ready for your review. '+link('applications'),'member',person.id);
+            'A '+qual.name+' application is ready for your review. '+link('application-review'),'member',person.id);
         }
         return {};
       }
@@ -1195,6 +1205,9 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
 
   return {
     handle,deliver,
+    navigationAccess(member,roles) {
+      return dashboardAccess(read(),member,roles);
+    },
     memberAwardsView(registry,campaigns=[],events={}) {
       const state=read();
       return {

@@ -80,7 +80,7 @@ const course={id:'course',name:'Game course',qualification:'jtac',formTitle:'Ass
   version:1,canAssess:true,criteria:[{title:'Criterion one',description:'Description'}]};
 const register={version:1,counts:true,rows:[{member:id,name:'Fixture member',candidate:true,mark:''},
   {member:'other',name:'Second member',candidate:true,mark:'loa'}]};
-const allViews=['orders','taskings','applications','progress','courses','records','training','attendance','gm','command'];
+const allViews=['orders','taskings','applications','application-review','progress','courses','records','training','attendance','gm','command'];
 const basics={access:can,views:allViews,member:id};
 const loadView=(view,fixture)=>load('unit-operations.js',input=>input?{id:'saved',recorded:1,skipped:0}:{...basics,...fixture},{query:'?view='+view});
 
@@ -164,7 +164,7 @@ test('Member, Command, and application views render the planned control surfaces
   label(member.root,'Use a reward').value='sunday:event';
   await submit(requireButton(member.root,'Reserve reward'));
   assert.equal(member.submitted.at(-1).action,'claim');
-  const applications=loadView('applications',{seasoned:true,operations:10,qualifications:[{key:'jtac',name:'JTAC',seasoned:true}],
+  const applications=loadView('application-review',{seasoned:true,operations:10,qualifications:[{key:'jtac',name:'JTAC',seasoned:true}],
     applications:[{id:'appt',name:'Applicant',qualificationName:'JTAC',status:'pending',canReview:true}]});
   await tick();
   await submit(requireButton(applications.root,'Approve'));
@@ -172,6 +172,7 @@ test('Member, Command, and application views render the planned control surfaces
   const command=loadView('command',{settings:{roles:{},policy:false,channel:''},adjustments:{},people:[person],qualifications:[],
     inbox:{applications:0,taskings:0,overdue:[],vacancies:[]},cases:[],delivery:[{id:'delivery',status:'failed',attempts:1,error:'Fixture'}]});
   await tick();
+  assert.equal(command.status.textContent||command.status.children[0]?.textContent||'', '');
   assert.ok(requireButton(command.root,'Save settings'));
   assert.ok(requireButton(command.root,'Apply intervention'));
   assert.ok(requireButton(command.root,'Save member adjustment'));

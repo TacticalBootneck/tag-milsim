@@ -205,7 +205,7 @@ try {
   await verify(await post(trainer,{action:'honour-review',id:nominationId,status:'declined'}),403);
   const visibleToStaff=await verify(await get(endpoint+'?view=honours',trainer));
   assert.equal(visibleToStaff.nominations,undefined);
-  assert.equal((await verify(await get(endpoint+'?view=honours',command))).nominations[0].id,nominationId);
+  assert.equal((await verify(await get(endpoint+'?view=honours-review',command))).nominations[0].id,nominationId);
   await verify(await post(command,{action:'honour-review',id:nominationId,status:'approved',award:'silver-star',citation:'Approved game citation'}));
   const memberApi='/api/member?view=member';
   assert.equal((await verify(await get(memberApi,student))).nextAction.heading,'Book Basic Training T1');
@@ -259,6 +259,33 @@ try {
   assert.equal((await verify(await get(memberApi,alpha))).nextAction.heading,'Your place is confirmed');
   const campaignApi='/api/campaign-workspace';
   await verify(await post(command,{action:'roles',team:rid.team,squad:rid.squad},campaignApi));
+  const commanderHub=await verify(await get('/staff/',command));
+  for (const area of ['administration','training','operations']) {
+    assert.ok(commanderHub.includes('href="/staff/'+area+'/"'));
+    await verify(await get('/staff/'+area+'/',command));
+  }
+  assert.match(await verify(await get('/staff/training/',trainer)), /Courses & assessment forms/);
+  for (const tool of ['members','roster','assignments']) {
+    assert.match(await verify(await get('/staff/administration/tools/?tool='+tool,command)), /id="staff-title"/);
+  }
+  const leaderHub=await verify(await get('/staff/',alpha));
+  assert.ok(leaderHub.includes('href="/staff/operations/"'));
+  assert.ok(!leaderHub.includes('href="/staff/administration/"'));
+  assert.match(await verify(await get('/staff/operations/',alpha)), /Create an AAR/);
+  await verify(await get('/staff/administration/',alpha),403);
+  await verify(await get('/staff/administration/tools/?tool=members',alpha),403);
+  await verify(await get('/staff/',ordinary),403);
+  await verify(await get('/members/aar/',ordinary),403);
+  assert.ok((await verify(await get('/staff/operations/'))).includes('auth/discord?next=%2Fstaff%2Foperations%2F'));
+  const memberDashboard=await verify(await get(memberApi,ordinary));
+  assert.equal(memberDashboard.unitDashboard,false);
+  assert.ok(memberDashboard.myCard.name);
+  assert.ok(memberDashboard.mySchedule.every(item=>item.status!=='View available seats'));
+  assert.equal((await verify(await get(memberApi,alpha))).unitDashboard,true);
+  const personalHonours=await verify(await get(endpoint+'?view=honours',command));
+  assert.equal(personalHonours.nominations,undefined);
+  assert.equal((await verify(await get(endpoint+'?view=honours-review',alpha))).nominations,undefined);
+
   const jpeg=Buffer.from([255,216,255,255,217]).toString('base64');
   await verify(await post(command,{action:'create',title:'Staging game campaign',mapName:'Test map',map:jpeg,backstory:'Test',goal:'Test'},campaignApi));
   const campaignView=await verify(await get(campaignApi,alpha));

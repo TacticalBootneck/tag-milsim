@@ -35,10 +35,16 @@ const stateCookie = '__Host-tag-oauth';
 const sessionCookie = '__Host-tag-session';
 const returnCookie = '__Host-tag-return';
 const maxAge = 4 * 3600;
+const staffPages = ['/staff/','/staff/administration/','/staff/training/','/staff/operations/','/staff/administration/tools/','/staff/training/tools/','/staff/operations/tools/'];
+const staffTools = {
+  '/staff/administration/tools/':['members','roster','assignments','leave','review','history'],
+  '/staff/training/tools/':['platoon'],
+  '/staff/operations/tools/':['create','events','attendance','campaign'],
+};
 function returnPath(value) {
-  if (typeof value!=='string' || value.length>350 || !value.startsWith('/members/')) return '/members/';
+  if (typeof value!=='string' || value.length>350 || !value.startsWith('/')) return '/members/';
   const url = new URL(value,PUBLIC_ORIGIN);
-  if (url.origin!==PUBLIC_ORIGIN || !['/members/unit/','/members/aar/','/members/campaign/'].includes(url.pathname)) return '/members/';
+  if (url.origin!==PUBLIC_ORIGIN || !['/members/unit/','/members/aar/','/members/campaign/',...staffPages].includes(url.pathname)) return '/members/';
   return url.pathname+url.search;
 }
 function savedReturn(request) {
@@ -225,6 +231,79 @@ function accessFor(member) {
   if (COMMAND_ROLE_ID && member.roles.includes(COMMAND_ROLE_ID)) return 'Command';
   if (TRAINING_CADRE_ROLE_ID && member.roles.includes(TRAINING_CADRE_ROLE_ID)) return 'Training Cadre';
   return 'Member';
+}
+function unitNavigation(member) {
+  let roles={};
+  try { roles=campaignWorkspace.roleSettings(); } catch { /* Campaign storage can be temporarily unavailable. */ }
+  const access=unitOperations.navigationAccess(member,{...roles,command:COMMAND_ROLE_ID,cadre:TRAINING_CADRE_ROLE_ID});
+  const administrative=accessFor(member)!=='Member';
+  return {...access,administrative,
+    administration:administrative||access.honours,
+    training:access.command||access.cadre||access.leader||access.reviews,
+    operations:administrative||access.command||access.leader||access.gameMaster};
+}
+function staffLanding(response,path,access) {
+  const unit = view => '/members/unit/?view='+view;
+  const tools = (name,area='administration') => '/staff/'+area+'/tools/?tool='+name;
+  const administration=[
+    ...(access.command?[
+      ['Manage members',tools('members'),'Update member names, ranks and roles.'],
+      ['Roster structure',tools('roster'),'Manage units, elements and slots.'],
+      ['Standing assignments',tools('assignments'),'Assign members to standing slots.'],
+      ['Command inbox',unit('command'),'Manage policy, role settings, cases and delivery.'],
+    ]:[]),
+    ...(access.administrative?[
+      ['Leave requests',tools('leave'),'Review and record member leave.'],
+      ['Attendance review',tools('review'),'Review attendance rates and exemptions.'],
+      ['Event history',tools('history'),'Browse completed and cancelled events.'],
+    ]:[]),
+    ...(access.honours?[['Review honours',unit('honours-review'),'Decide nominations and publish citations.']]:[]),
+  ];
+  const training=[
+    ...(access.command||access.cadre?[
+      ['Courses & assessment forms',unit('courses'),'Create course templates, upload materials and build assessment forms.'],
+      ['Schedule training',unit('training'),'Create Basic Training, specialist or squad sessions and choose who to invite.'],
+      ['Attendance & sign-off',unit('attendance'),'Record attendance and candidate results.'],
+    ]:[]),
+    ...(access.administrative?[['Schedule Sunday platoon training',tools('platoon','training'),'Choose a date, time and participating groups.']]:[]),
+    ...(access.leader||access.cadre?[['Candidate records',unit('records'),'Review available assessments.']]:[]),
+    ...(access.reviews?[['Review applications',unit('application-review'),'Decide applications for qualifications you oversee.']]:[]),
+  ];
+  const operations=[
+    ...(access.leader||access.command?[
+      ['Campaign','/members/campaign/?manage=1','Open the current campaign and its reports.'],
+      ['Create an AAR','/members/aar/','Start a report or continue one of your private drafts.'],
+      ['Orders & readiness',unit('orders'),'View orders and track readiness for upcoming events.'],
+      ['Taskings',unit('taskings'),'View assigned tasks and follow-ups.'],
+    ]:[]),
+    ...(access.command||access.gameMaster?[['Game Master briefs',unit('gm'),'Open restricted operation briefs.']]:[]),
+    ...(access.administrative?[
+      ['Create an operation',tools('create','operations'),'Set up a Sunday operation.'],
+      ['Manage events',tools('events','operations'),'Edit, cancel or archive scheduled events.'],
+      ['Event attendance',tools('attendance','operations'),'Open a register and mark attendance.'],
+    ]:[]),
+    ...(access.command?[['Public campaign updates',tools('campaign','operations'),'Publish and edit public campaign entries.']]:[]),
+  ];
+  const pages={
+    '/staff/':['Unit Dashboard',[
+      ...(access.administration?[['Administration','/staff/administration/','Manpower, roster, leave and reports.']]:[]),
+      ...(access.training?[['Training','/staff/training/','Courses, assessment forms and training sessions.']]:[]),
+      ...(access.operations?[['Operations','/staff/operations/','Campaign, AARs, orders and events.']]:[]),
+    ]],
+    '/staff/administration/':['Administration',administration],
+    '/staff/training/':['Training',training],
+    '/staff/operations/':['Operations',operations],
+  };
+  const [title,cards]=pages[path];
+  if (!cards.length) return reply(response,403,'This area is unavailable for your roles.');
+  const links=cards.map(([label,url,description])=>'<a class="dashboard-tile" href="'+url+'"><strong>'+label+'</strong><span>'+description+'</span></a>').join('');
+  const back=path==='/staff/'?'':'<a class="button outline small" href="/staff/">Unit Dashboard</a>';
+  return reply(response,200,'<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'+
+    title+' | TAG MILSIM</title><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/dashboard.css?v=dashboard-nav">'+
+    '<header class="top"><div class="wrap top-inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><strong>TAG MILSIM</strong></a>'+
+    '<div class="portal-header-actions">'+back+'<a class="button outline small" href="/members/">Members Dashboard</a></div></div></header>'+
+    '<main class="wrap section"><h1>'+title+'</h1><nav class="dashboard-tiles" aria-label="'+title+'">'+links+'</nav></main></html>',
+    'text/html; charset=utf-8');
 }
 async function dashboardAction(request, response, member) {
   if (request.headers.origin !== PUBLIC_ORIGIN) return reply(response, 403, 'Invalid request origin.');
@@ -470,7 +549,20 @@ async function memberData(member, view) {
       return element && !element.archived ? element.label+' · '+element.slots[Number(number)-1] : null;
     }).filter(Boolean).join(' / '),
   });
-  if (view==='directory') return { displayName:rankedName(currentName,names[id]?.rank),access,recordsDelayed:roster.unavailable,
+  const rosterView=()=>({
+    rosterUnits:Object.entries(units).filter(([,unit])=>!unit.archived).map(([key,unit])=>({key,label:unit.label})),
+    roster: Object.entries(groups).filter(([,group])=>!group.archived).map(([key, group]) => ({
+      key, label:group.label, parent:group.parent, unit:group.unit ?? 'tag', unitLabel:units[group.unit ?? 'tag']?.label ?? 'TAG',
+      seats: group.slots.flatMap((role, index) => {
+        if (group.removed?.includes(index+1)) return [];
+        const assigned = rosterData.standing[key + ':' + (index + 1)];
+        const name = display(assigned);
+        return [{ code: rosterSlotCode(key,index+1,groups), role, member: name, rank: assigned ? names[assigned]?.rank : null, occupied: Boolean(assigned),
+          ...(access === 'Command' && view === 'staff' ? { key: key + ':' + (index + 1), assigned: assigned ?? '' } : {}) }];
+      }),
+    })),
+  });
+  if (view==='directory') return { ...rosterView(), unitDashboard:Object.values(unitNavigation(member)).some(Boolean), displayName:rankedName(currentName,names[id]?.rank),access,recordsDelayed:roster.unavailable,
     directory:Object.entries(directory).filter(([key])=>!rosterData.participation?.[key]?.removedAt)
       .map(([key,entry])=>toCard(key,entry)).sort((a,b)=>a.name.localeCompare(b.name)),
   };
@@ -505,6 +597,10 @@ async function memberData(member, view) {
     displayName:rankedName(currentName,names[id]?.rank), editName:baseDisplayName(currentName,names[id]?.rank), medals:directory[id]?.medals ?? 0, streak:directory[id]?.streak ?? 0,
     recordsDelayed: roster.unavailable || trainingResult.unavailable || profileResult.unavailable,
     progression, mainOps, access, leave, staff, nextAction, decorations:decorations(id),
+    unitDashboard:Object.values(unitNavigation(member)).some(Boolean),
+    myCard:toCard(id,{name:currentName,status:progression}),
+    mySchedule:[...upcomingOperations,...upcomingTraining].filter(event=>['Attending','Awaiting confirmation','Booked','Waitlisted'].includes(event.status))
+      .sort((a,b)=>a.start-b.start).slice(0,30).map(({title,start,status,url,orders})=>({title,start,status,url,orders})),
     qualifications: [...new Set([...Object.values(rosterData.courses).filter(course => roles.has(course.roleId)&&!awardView.revokedRoles(id).includes(course.roleId)).map(course => course.name),
       ...awardView.names(id)])],
     training: results.filter(item=>!item.results[id].unitAssessment).slice(0,12).map(item => ({
@@ -515,18 +611,8 @@ async function memberData(member, view) {
       title: event.title, status: { attended:'Attended', absent:'Failed to attend', loa:'LOA' }[event.attendance[id].status] ?? 'Recorded',
     })),
     events: [...upcomingOperations,...upcomingTraining].sort((a,b)=>a.start-b.start).slice(0,30)
-      .map(({title,start,status,url,lineup})=>({title,start,status,url,lineup})),
-    rosterUnits:Object.entries(units).filter(([,unit])=>!unit.archived).map(([key,unit])=>({key,label:unit.label})),
-    roster: Object.entries(groups).filter(([,group])=>!group.archived).map(([key, group]) => ({
-      key, label:group.label, parent:group.parent, unit:group.unit ?? 'tag', unitLabel:units[group.unit ?? 'tag']?.label ?? 'TAG',
-      seats: group.slots.flatMap((role, index) => {
-        if (group.removed?.includes(index+1)) return [];
-        const assigned = rosterData.standing[key + ':' + (index + 1)];
-        const name = display(assigned);
-        return [{ code: rosterSlotCode(key,index+1,groups), role, member: name, rank: assigned ? names[assigned]?.rank : null, occupied: Boolean(assigned),
-          ...(access === 'Command' && view === 'staff' ? { key: key + ':' + (index + 1), assigned: assigned ?? '' } : {}) }];
-      }),
-    })),
+      .map(({title,start,status,url,lineup,orders})=>({title,start,status,url,lineup,orders})),
+    ...rosterView(),
   };
 }
 
@@ -621,6 +707,10 @@ const server = createServer(async (request, response) => {
       if (removed && !(Date.parse(member.joined_at) > removed)) return reply(response,403,'TAG membership required.');
       if (privateImage) return campaignWorkspace.serveImage(response,privateImage[1],false);
       if (path === '/members/campaign/' || path === '/members/aar/') {
+        if (path === '/members/aar/' || url.searchParams.get('manage')==='1') {
+          const access=unitNavigation(member);
+          if (!access.command && !access.leader) return reply(response,403,'A configured Team Leader, Squad Leader or Command role is required.');
+        }
         response.setHeader('Content-Security-Policy', response.getHeader('Content-Security-Policy')+
           "; img-src 'self' blob:"+(mediaStore ? ' '+mediaStore.origin : ''));
         return await serve(response,'./campaign-workspace.html');
@@ -633,17 +723,33 @@ const server = createServer(async (request, response) => {
     }
     const sections = {'/units':'/units/','/campaign':'/campaign/','/qualifications':'/qualifications/','/members':'/members/','/staff':'/staff/','/members/directory':'/members/directory/'};
     if (Object.hasOwn(sections,path)) return redirect(response,sections[path]);
-    const pages = {'/members/':'dashboard.html','/staff/':'staff.html','/members/directory/':'directory.html'};
+    if (staffPages.some(page=>page===path+'/')) return redirect(response,path+'/'+url.search);
+    if (staffPages.includes(path)) {
+      response.setHeader('Cache-Control','private, no-store');
+      const session=sessions.get(cookies(request)[sessionCookie]);
+      const member=session?.expires>Date.now()?await verifiedMember(session,false):null;
+      if (!member || member.user.id!==session.memberId) return featureSignin(response,url);
+      const {data:roster}=await botData('sunday-rosters.json',prepareRoster);
+      const removed=roster.participation?.[member.user.id]?.removedAt;
+      if (removed && !(Date.parse(member.joined_at)>removed)) return reply(response,403,'TAG membership required.');
+      const access=unitNavigation(member);
+      if (!Object.hasOwn(staffTools,path)) return staffLanding(response,path,access);
+      if (!access.administrative) return reply(response,403,'Staff access required.');
+      const tool=url.searchParams.get('tool')||'attendance';
+      if (!staffTools[path].includes(tool)) return reply(response,404,'Management tool not found.');
+      if (['members','roster','assignments','campaign'].includes(tool) && !access.command) {
+        return reply(response,403,'Command access required.');
+      }
+      const html=await readFile(new URL('./staff.html',import.meta.url),'utf8');
+      return reply(response,200,html.replace('__TAG_LOGOUT_TOKEN__',session.logoutToken),'text/html; charset=utf-8');
+    }
+    const pages = {'/members/':'dashboard.html','/members/directory/':'directory.html'};
     if (Object.hasOwn(pages,path) || path === '/api/member' || path === '/api/member/action') {
       response.setHeader('Cache-Control','private, no-store');
       const key = cookies(request)[sessionCookie];
       const session = sessions.get(key);
       if (Object.hasOwn(pages,path)) {
         if (!session || session.expires <= Date.now()) return await serve(response, './signin.html');
-        if (path === '/staff/') {
-          const member = await verifiedMember(session,false);
-          if (!member || accessFor(member)==='Member') return reply(response,403,'Staff access required.');
-        }
         const html = await readFile(new URL('./'+pages[path],import.meta.url), 'utf8');
         return reply(response, 200, html.replace('__TAG_LOGOUT_TOKEN__', session.logoutToken), 'text/html; charset=utf-8');
       }

@@ -37,7 +37,7 @@ async function loadDashboard(fresh = false) {
     const staffLink = document.querySelector('#staff-nav');
     if (staffLink) staffLink.hidden = true;
     if (response.status === 403 && view === 'staff') {
-      status.textContent = 'Staff access is required to view the Unit Dashboard.';
+      status.textContent = 'Staff access is required to open this management tool.';
       return;
     }
     const link = node('a', 'Sign in with Discord');
@@ -55,7 +55,7 @@ async function loadDashboard(fresh = false) {
   status.textContent = 'Signed in as ' + data.displayName + ' · ' + data.access +
     (data.recordsDelayed ? ' · Some records are temporarily unavailable or delayed.' : '');
   const unitLink = document.querySelector('#staff-nav');
-  if (unitLink) unitLink.hidden = data.access==='Member';
+  if (unitLink) unitLink.hidden = !data.unitDashboard;
   if (view==='directory') {
     list('unit-directory',data.directory.map(member=>{
       const card=node('article','');
@@ -67,15 +67,21 @@ async function loadDashboard(fresh = false) {
       if (member.decorations?.length) card.append(decorationRack(member.decorations));
       return card;
     }),'The directory will populate after the bot’s first member sync.');
+    list('roster-content',rosterCards(data),'No roster positions have been configured.');
     return;
   }
   if (view==='staff') {
-    list('roster-content',rosterCards(data),'No roster positions have been configured.');
+    if (staffTool==='assignments' && data.access==='Command') {
+      document.querySelector('#assignments').hidden=false;
+      list('roster-content',rosterCards(data),'No roster positions have been configured.');
+    }
     staffView(data);
     return;
   }
   renderNextAction(data.nextAction);
   list('record-content', [
+    node('h3',data.myCard.name),
+    ...(data.myCard.billet?[row('Standing assignment',data.myCard.billet)]:[]),
     row('Progression', data.progression),
     row('Attended main ops', String(data.mainOps)),
     row('Qualifications', data.qualifications.join(', ') || 'None recorded'),
@@ -91,8 +97,11 @@ async function loadDashboard(fresh = false) {
       service.operations+'/'+service.next+' main operations · '+service.training+'/'+service.next+' Sunday platoon training sessions'));
     else rewards.append(node('p','Deployment ribbon progress begins after probation is recorded.'));
   }
+  const rewardLink=node('a','View my attendance and redeem rewards');
+  rewardLink.href='/members/unit/?view=progress';
+  rewards.append(rewardLink);
   renderOwnName(data.editName);
-  list('events-content', data.events.map(event => {
+  const eventCard = event => {
     const item = node('div', '');
     item.append(row(event.title, format.format(event.start) + ' UK · ' + event.status));
     if (event.url) {
@@ -101,14 +110,21 @@ async function loadDashboard(fresh = false) {
       link.href = event.url;
       item.append(link);
     }
+    if (event.orders) {
+      const link = node('a', 'Read orders');
+      link.className = 'button outline small';
+      link.href = event.orders;
+      item.append(link);
+    }
     if (event.lineup?.length) {
       const expanded = node('details', '');
       expanded.append(node('summary', 'Event lineup'), ...groupRows(event.lineup));
       item.append(expanded);
     }
     return item;
-  }), 'No upcoming events have been posted.');
-  list('roster-content', rosterCards(data), 'No roster positions have been configured.');
+  };
+  list('events-content', data.events.map(eventCard), 'No upcoming events have been posted.');
+  list('my-schedule-content', data.mySchedule.map(eventCard), 'You have no upcoming bookings or assigned slots.');
   renderLeave(data.leave);
 }
 
@@ -192,8 +208,9 @@ function decorationRack(items) {
 const actionStatus = document.querySelector('#action-status');
 const staffContent = document.querySelector('#staff-content');
 const dialog = document.querySelector('#assignment');
-let activeStaffView = 'Attendance';
-let activeRegister;
+const staffQuery = new URLSearchParams(location.search);
+const staffTool = staffQuery.get('tool') || 'attendance';
+let activeRegister = staffQuery.get('event') || undefined;
 let selectedSlot;
 
 function option(value, label) {
@@ -492,10 +509,8 @@ function attendanceRegister(registers) {
   render();
   staffContent.append(chooser, list);
 }
-function createEvent(data) {
+function createEvent(data, type) {
   const form = node('form', '');
-  const kind = field(form, 'Event type', node('select', ''));
-  kind.append(option('operation','Main Operation'), option('training','Platoon Training'), option('basic','Basic Training'), option('specialist','Specialist Training'));
   const date = field(form, 'UK date', input('date'));
   date.required = true;
   const hour = field(form, 'UK hour', node('select', ''));
@@ -503,56 +518,28 @@ function createEvent(data) {
   hour.append(...Array.from({length:24}, (_,i) => option(String(i).padStart(2,'0'), String(i).padStart(2,'0'))));
   minute.append(...Array.from({length:12}, (_,i) => option(String(i*5).padStart(2,'0'), String(i*5).padStart(2,'0'))));
   hour.value = '18';
-  const details = node('div', '');
-  form.append(details);
+  const title = field(form, 'Title (optional)', input('text'));
+  title.maxLength = 80;
+  const groups = node('fieldset', '');
+  groups.append(node('legend', 'Participating groups'));
+  for (const group of data.staff.groups.filter(group=>!group.archived)) {
+    const check = field(groups, group.label, input('checkbox',group.key));
+    check.checked = true;
+  }
   const submit = button('Publish in Discord');
   submit.type = 'submit';
   const feedback = node('p', '');
   feedback.setAttribute('role','status');
-  form.append(submit, feedback);
-  let getDetails;
-  kind.onchange = () => {
-    details.replaceChildren();
-    submit.disabled = false;
-    if (['operation','training'].includes(kind.value)) {
-      const title = field(details, 'Title (optional)', input('text'));
-      title.maxLength = 80;
-      const groups = node('fieldset', '');
-      groups.append(node('legend', 'Participating groups'));
-      for (const group of data.staff.groups.filter(group=>!group.archived)) {
-        const check = field(groups, group.label, input('checkbox',group.key));
-        check.checked = true;
-      }
-      details.append(groups);
-      getDetails = () => ({title:title.value, groups:[...groups.querySelectorAll(':checked')].map(el => el.value)});
-      return;
-    }
-    const course = field(details, 'Course', node('select', ''));
-    const specialist = kind.value === 'specialist';
-    const options = specialist ? data.staff.courses : [{key:'t1',name:'Basic Training T1'}, {key:'t2',name:'Basic Training T2'}];
-    course.append(...options.map(item => option(item.key,item.name)));
-    if (!options.length) {
-      details.append(node('p','Configure a qualification role with /tag course first.'));
-      submit.disabled = true;
-    }
-    const recruit = field(details, specialist ? 'Trainee slots' : 'Recruit slots', input('number','12'));
-    const cadre = field(details, 'Training Cadre slots', input('number','4'));
-    for (const control of [recruit,cadre]) {
-      control.min = '0';
-      control.max = '99';
-      control.required = true;
-    }
-    getDetails = () => ({course:course.value,recruit:recruit.value,cadre:cadre.value,specialist});
-  };
-  kind.onchange();
+  form.append(groups, submit, feedback);
   form.onsubmit = async event => {
     event.preventDefault();
-    const sunday = ['operation','training'].includes(kind.value);
     if (!window.confirm('Publish this event to TAG MILSIM Discord?')) return;
-    await save(sunday ? 'sunday' : 'training', {type:kind.value,date:date.value,hour:hour.value,minute:minute.value,...getDetails()}, submit,feedback);
+    const selected = [...groups.querySelectorAll(':checked')].map(el => el.value);
+    await save('sunday', {type,date:date.value,hour:hour.value,minute:minute.value,title:title.value,groups:selected}, submit,feedback);
   };
   staffContent.append(form);
 }
+
 function renderOwnName(name) {
   const form = node('form', '');
   form.className = 'own-name';
@@ -957,18 +944,37 @@ function staffView(data) {
     return;
   }
   document.querySelector('#staff').hidden = false;
-  const tabs = document.querySelector('#staff-tabs');
+  const titles={attendance:'Attendance',create:'Create an operation',platoon:'Schedule Sunday platoon training',events:'Manage events',review:'Attendance review',
+    history:'Event history',leave:'Leave requests',members:'Manage members',roster:'Roster structure',
+    assignments:'Standing assignments',campaign:'Public campaign updates'};
+  const label=Object.hasOwn(titles,staffTool)?titles[staffTool]:null;
+  document.querySelector('#staff-title').textContent=label??'Management';
+  const back=document.querySelector('#management-back');
+  if (staffTool==='platoon') {
+    back.href='/staff/training/';
+    back.textContent='Training';
+  } else if (['attendance','create','events','campaign'].includes(staffTool)) {
+    back.href='/staff/operations/';
+    back.textContent='Operations';
+  }
+  if (!label || ['members','roster','assignments','campaign'].includes(staffTool) && data.access!=='Command') {
+    staffContent.replaceChildren(node('p','This area is unavailable for your roles.'));
+    return;
+  }
+  if (staffTool==='assignments') {
+    document.querySelector('#staff').hidden=true;
+    return;
+  }
   function render() {
-    for (const tab of tabs.children) tab.setAttribute('aria-pressed',String(tab.textContent === activeStaffView));
     staffContent.replaceChildren();
     const registers = data.staff.registers;
-    if (activeStaffView === 'Attendance') return attendanceRegister(registers.filter(item => !item.archived));
-    if (activeStaffView === 'Create event') return createEvent(data);
-    if (activeStaffView === 'Manage events') return managedEvents(data.staff.managedEvents,data.staff.groups);
-    if (activeStaffView === 'Members') return memberEditor(data.staff.people);
-    if (activeStaffView === 'Public campaign') return campaignEditor(data.staff.campaignReleases);
-    if (activeStaffView === 'Roster elements') return rosterElementEditor(data.staff.elements,data.staff.units);
-    if (activeStaffView === 'Leave requests') {
+    if (staffTool === 'attendance') return attendanceRegister(registers.filter(item => !item.archived));
+    if (staffTool === 'create' || staffTool === 'platoon') return createEvent(data,staffTool==='platoon'?'training':'operation');
+    if (staffTool === 'events') return managedEvents(data.staff.managedEvents,data.staff.groups);
+    if (staffTool === 'members') return memberEditor(data.staff.people);
+    if (staffTool === 'campaign') return campaignEditor(data.staff.campaignReleases);
+    if (staffTool === 'roster') return rosterElementEditor(data.staff.elements,data.staff.units);
+    if (staffTool === 'leave') {
       if (data.access === 'Command') {
         const create = button('Record leave for a member',true);
         create.onclick = async () => {
@@ -1006,7 +1012,7 @@ function staffView(data) {
       }
       return;
     }
-    if (activeStaffView === 'History') {
+    if (staffTool === 'history') {
       for (const event of data.staff.managedEvents.filter(item => item.cancelled)) {
         staffContent.append(row(event.title + ' · ' + shortDate.format(event.start), 'Cancelled'));
       }
@@ -1016,8 +1022,8 @@ function staffView(data) {
           staffContent.append(row(event.title + ' · ' + shortDate.format(event.start), attended + ' attended · Archived'));
           continue;
         }
-        const history = button(event.title + ' · ' + shortDate.format(event.start), true);
-        history.onclick = () => { activeRegister = event.key; activeStaffView = 'Attendance'; render(); };
+        const history = node('a',event.title + ' · ' + shortDate.format(event.start));
+        history.href='/staff/operations/tools/?tool=attendance&event='+encodeURIComponent(event.key);
         const line = row('', attended + ' attended');
         line.firstChild.replaceChildren(history);
         staffContent.append(line);
@@ -1040,14 +1046,6 @@ function staffView(data) {
       staffContent.append(row(mark.name, rate + '% · ' + mark.attended + '/' + mark.total + (mark.exempt ? ' · Exempt' : mark.attended / mark.total < .75 ? ' · Review' : '')));
     }
   }
-  const views = ['Attendance','Create event','Manage events','Attendance review','History','Leave requests'];
-  if (data.access === 'Command') views.push('Members','Roster elements','Public campaign');
-  if (!views.includes(activeStaffView)) activeStaffView = 'Attendance';
-  tabs.replaceChildren(...views.map(label => {
-    const tab = button(label,true);
-    tab.onclick = () => { activeStaffView = label; render(); };
-    return tab;
-  }));
   render();
 }
 if (dialog) document.querySelector('#assignment-cancel').onclick = () => dialog.close();

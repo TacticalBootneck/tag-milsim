@@ -266,7 +266,7 @@ test('rolling attendance holds, exactly five-and-five rewards, priority places a
   await f.post('command',{action:'member-adjustment',member:people.other,kind:'seasoned',mode:'grant',reason:'Prior service verified'});
   assert.equal((await f.get('other','applications')).seasoned,true);
   await f.post('other',form);
-  const application=(await f.get('tacp','applications')).applications[0];
+  const application=(await f.get('tacp','application-review')).applications[0];
   await f.post('heavy',{action:'review-application',id:application.id,status:'approved'},403);
   await f.post('tacp',{action:'review-application',id:application.id,status:'approved'});
   const course=f.add(event('priority','course',at+DAY,{qualification:'jtac',standardFull:true}));
