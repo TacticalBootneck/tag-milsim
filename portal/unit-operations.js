@@ -395,10 +395,14 @@ function editCourse(parent,course) {
 }
 function trainingSchedule() {
   heading(content,'Schedule training');
+  if (data.squadOnly && !data.squads.length) {
+    content.append(el('p','Ask Command to assign you to your Squad Leader slot on the standing roster.'));
+    return;
+  }
   const editor=form(card(content,'New training event'));
   const event=crypto.randomUUID();
-  const training=field(editor,'Training type',{choices:[['','Choose a training type'],...data.types.map(({key,name})=>[key,name])],required:true,
-    value:query.get('type')??''});
+  const training=field(editor,'Training type',{choices:[...(data.squadOnly?[]:[['','Choose a training type']]),...data.types.map(({key,name})=>[key,name])],required:true,
+    value:data.squadOnly?'squad':query.get('type')??''});
   const title=field(editor,'Training name',{value:query.get('title')??'',required:true,limit:120});
   const date=field(editor,'Session date (UK)',{type:'date',required:true,value:day.format(Date.now())});
   const time=field(editor,'Session time (UK)',{type:'time',required:true});
@@ -441,7 +445,7 @@ function trainingSchedule() {
     const term=search.value.toLowerCase().trim();
     for (const [,name,input] of memberChoices) input.parentElement.hidden=!name.toLowerCase().includes(term);
   };
-  recipients.append(members);
+  if (!data.squadOnly) recipients.append(members);
   submit(editor,'Schedule and post to Discord',()=>({action:'schedule-training',id:event,training:training.value,title:title.value,
     day:date.value,time:time.value,places:places.valueAsNumber,instructors:cadre.valueAsNumber,limit:limit.disabled?0:limit.valueAsNumber,
     channel:channel.value,repeat:repeat.value,squads:squadChoices.filter(([,input])=>input.checked).map(([key])=>key),

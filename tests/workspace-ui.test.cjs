@@ -233,3 +233,23 @@ test('Training form submits custom name, channel, cadence, squad and member sele
   await submit(requireButton(training.root,'Schedule and post to Discord'));
   assert.equal(training.submitted[1].inviteRecruits,true);
 });
+
+
+test('Squad Leader training defaults to Squad training and only shows their squad',async()=>{
+  const training=loadView('training',{
+    squadOnly:true,types:[{key:'squad',name:'Squad training'}],
+    squads:[{key:'1-1',label:'11'}],people:[],channels:[],series:[],
+  });
+  await tick();
+  const type=label(training.root,'Training type');
+  assert.equal(type.value,'squad');
+  assert.deepEqual(type.children.map(item=>item.value),['squad']);
+  assert.equal(label(training.root,'Filter members'),undefined);
+  assert.equal(label(training.root,'Invite recruits by DM').disabled,true);
+  label(training.root,'Training name').value='Squad practice';
+  label(training.root,'Session time (UK)').value='19:00';
+  label(training.root,'11').checked=true;
+  await submit(requireButton(training.root,'Schedule and post to Discord'));
+  assert.deepEqual(training.submitted[0].squads,['1-1']);
+  assert.deepEqual(training.submitted[0].people,[]);
+});

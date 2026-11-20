@@ -122,7 +122,7 @@ const baseRoster={layoutVersion:2,soarLayoutVersion:2,hqLayoutVersion:2,courses:
   rosterElements:groups,rosterUnits:{devgru:{label:'DEVGRU'}},events:{[futureId]:event,...missedEvents},memberDetails:exemptFromRequired,
   discordMemberNames:{[uid.command]:'Command',[uid.alice]:'Alice',[uid.bravo]:'Bravo'},
   discordMemberRoles:{[uid.command]:rolesByUser.command},
-  standing:{'devgru-alpha:1':uid.alice,'devgru-bravo:1':uid.bravo,'devgru-charlie:1':uid.charlie,'soar:1':uid.pilot},
+  standing:{'devgru-alpha:1':uid.alice,'devgru-bravo:1':uid.bravo,'devgru-charlie:1':uid.charlie,'soar:1':uid.pilot,'1-1:1':uid.charlie,'1-1:4':uid.student,'1-2:4':uid.pilot},
   leaveRanges:{[uid.ordinary]:[{from:new Date(start-86400000).toISOString().slice(0,10),to:new Date(start+86400000).toISOString().slice(0,10)}]},
   directoryUpdatedAt:wall};
 writeFileSync(resolve(bot,'sunday-rosters.json'),JSON.stringify(baseRoster));
@@ -259,6 +259,22 @@ try {
   assert.equal((await verify(await get(memberApi,alpha))).nextAction.heading,'Your place is confirmed');
   const campaignApi='/api/campaign-workspace';
   await verify(await post(command,{action:'roles',team:rid.team,squad:rid.squad},campaignApi));
+  const squadLeader=await login('charlie');
+  assert.match(await verify(await get('/staff/training/',squadLeader)), /Schedule squad training/);
+  assert.doesNotMatch(await verify(await get('/staff/training/',alpha)), /Schedule squad training/);
+  const squadOptions=await verify(await get(endpoint+'?view=training',squadLeader));
+  assert.deepEqual(squadOptions.types,[{key:'squad',name:'Squad training'}]);
+  assert.deepEqual(squadOptions.squads,[{key:'1-1',label:'11'}]);
+  assert.deepEqual(squadOptions.people,[]);
+  assert.deepEqual(squadOptions.series,[]);
+  assert.ok(squadOptions.channels.some(item=>item.id===ordersChannel));
+  const squadSeries=randomUUID();
+  const squadSession={...recurring,id:squadSeries,title:'Squad 11 Practice',squads:['1-1'],people:[]};
+  await verify(await post(alpha,squadSession),403);
+  for (const change of [{training:'unit'},{training:'t1'},{squads:['1-2']},{people:[uid.pilot]},{inviteRecruits:true}]) {
+    await verify(await post(squadLeader,{...squadSession,...change}),403);
+  }
+  await verify(await post(squadLeader,squadSession));
   const commanderHub=await verify(await get('/staff/',command));
   for (const area of ['administration','training','operations']) {
     assert.ok(commanderHub.includes('href="/staff/'+area+'/"'));
@@ -448,6 +464,9 @@ try {
   upkeep(); await delay(50); upkeep(); await delay(30);
   const invites=()=>captures.dms.filter(item=>item.message.content?.includes('Training invitation · Alpha Communications Practice'));
   assert.deepEqual(invites().map(item=>item.id).sort(),[uid.alice,uid.pilot].sort());
+  const squadInvites=()=>captures.dms.filter(item=>item.message.content?.includes('Training invitation · Squad 11 Practice'));
+  assert.equal(readSessions()[squadSeries].trainingTrack,'squad');
+  assert.deepEqual(squadInvites().map(item=>item.id).sort(),[uid.charlie,uid.student].sort());
   const recruitInvites=()=>captures.dms.filter(item=>item.message.content?.includes('Training invitation · Recruit DM Basic Training'));
   assert.deepEqual(recruitInvites().map(item=>item.id).sort(),[uid.student,uid.pilot].sort());
   const actor=members.get(uid.alice);
@@ -474,10 +493,17 @@ try {
   assert.deepEqual(invites().map(item=>item.id).sort(),[uid.alice,uid.alice,uid.pilot,uid.pilot].sort());
   assert.equal(readSessions()[readSessions()[basicSeries].repeatNext].inviteRecruits,true);
   assert.deepEqual(recruitInvites().map(item=>item.id).sort(),[uid.student,uid.student,uid.pilot].sort());
+  const nextSquad=readSessions()[squadSeries].repeatNext;
+  assert.ok(nextSquad);
+  assert.deepEqual(readSessions()[nextSquad].squadLeaderScope,['1-1']);
+  assert.deepEqual(squadInvites().map(item=>item.id).sort(),[uid.charlie,uid.charlie,uid.student,uid.student].sort());
+  await verify(await post(await login('alice'),{action:'stop-training-series',event:'training:'+nextSquad}),403);
+  await verify(await post(await login('charlie'),{action:'stop-training-series',event:'training:'+nextSquad}));
   const currentTrainer=await login('trainer');
   await verify(await post(currentTrainer,{action:'stop-training-series',event:'training:'+completed.repeatNext}));
   await deliveries();
   assert.equal(readSessions()[completed.repeatNext].repeatStopped,true);
+  assert.equal(readSessions()[nextSquad].repeatStopped,true);
   clock=repeat.start+4*3600000;
   upkeep(); await delay(50);
   assert.equal(readSessions()[completed.repeatNext].repeatNext,undefined);

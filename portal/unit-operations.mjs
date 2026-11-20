@@ -162,20 +162,25 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
   function permissions(state,member,ctx) {
     const has=rid=>Boolean(rid && member.roles.includes(rid));
     const command=has(ctx.roles.command);
-    const leader=has(ctx.roles.team) || has(ctx.roles.squad);
+    const squadLeader=has(ctx.roles.squad);
+    const leader=has(ctx.roles.team) || squadLeader;
     const gameMaster=has(state.settings.roles.gm);
     const instructors=state.settings.roles;
     const cadre=has(ctx.roles.cadre) || Object.keys(specialties).some(key=>has(instructors[key])) || has(instructors.t1) || has(instructors.t2);
     const assign=entry=>Boolean(entry && (['t1','t2'].includes(entry.specialty)
       ? has(instructors[entry.specialty])
       : entry.specialty && has(instructors[entry.specialty])));
-    return {command,leader,cadre,gameMaster,assign,review:entry=>command || has(entry?.reviewer) || assign(entry)};
+    return {command,leader,squadLeader,cadre,gameMaster,assign,review:entry=>command || has(entry?.reviewer) || assign(entry)};
   }
   function dashboardAccess(state,member,roles) {
-    const {command,cadre,leader,gameMaster}=permissions(state,member,{roles});
+    const {command,cadre,leader,squadLeader,gameMaster}=permissions(state,member,{roles});
     const reviews=command || cadre || Object.values(state.settings.qualifications).some(entry=>
       entry.reviewer && member.roles.includes(entry.reviewer));
-    return {command,cadre,leader,gameMaster,reviews,honours:member.roles.includes(commanderRole)};
+    return {command,cadre,leader,squadLeader,gameMaster,reviews,honours:member.roles.includes(commanderRole)};
+  }
+  function ownsSquadSeries(event,actor,access,ctx) {
+    return access.squadLeader && event.scheduleActor===actor && event.squadLeaderScope?.length>0 &&
+      event.squadLeaderScope.every(key=>ctx.ledSquads?.includes(key));
   }
   function needEvent(ctx,key) {
     check(typeof key==='string' && eventKeys.test(key) && ctx.events[key] && !ctx.events[key].cancelled,'Choose an available event.',404);
@@ -301,7 +306,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
     const navigation=dashboardAccess(state,member,ctx.roles);
     const payload={access:navigation,
       views:[...new Set(['orders','taskings','applications','progress','honours',...(access.leader?['records']:[]),...(access.cadre?['courses','records']:access.command?['courses']:[]),
-        ...(canStaff?['training','attendance']:[]),...(access.command||access.gameMaster?['gm']:[]),...(access.command?['command']:[]),
+        ...(canStaff||access.squadLeader?['training']:[]),...(canStaff?['attendance']:[]),...(access.command||access.gameMaster?['gm']:[]),...(access.command?['command']:[]),
         ...(navigation.reviews?['application-review']:[]),...(navigation.honours?['honours-review']:[])])],
       member:member.user.id};
     if (view==='honours' || view==='honours-review' && navigation.honours) {
@@ -398,14 +403,19 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         return [];
       });
     }
-    if (view==='training' && canStaff) {
-      payload.types=[{key:'squad',name:'Squad training'},{key:'unit',name:'Unit training'},
-        ...all.filter(qual=>access.command||access.assign(qual)).map(({key,name})=>({key,name}))];
-      payload.squads=ctx.squads??[];
-      payload.people=Object.values(ctx.members).map(({id,name})=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name));
-      payload.series=events.filter(event=>event.kind==='course'&&event.repeat&&event.start>now()&&!event.repeatStopped)
-        .map(({id,key,title,start,repeat,qualification})=>({id,key,title,start,repeat,canStop:access.command||
-          (qualification?access.assign(all.find(item=>item.key===qualification)):access.cadre)}));
+    if (view==='training' && (canStaff||access.squadLeader)) {
+      payload.squadOnly=!canStaff;
+      payload.types=[{key:'squad',name:'Squad training'},...(canStaff?[{key:'unit',name:'Unit training'},
+        ...all.filter(qual=>access.command||access.assign(qual)).map(({key,name})=>({key,name}))]:[])];
+      payload.squads=(ctx.squads??[]).filter(item=>canStaff||ctx.ledSquads?.includes(item.key));
+      payload.people=canStaff?Object.values(ctx.members).map(({id,name})=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)):[];
+      payload.series=events.filter(event=>event.kind==='course'&&event.repeat&&event.start>now()&&!event.repeatStopped&&
+        (canStaff||ownsSquadSeries(event,self,access,ctx)))
+        .map(event=>{
+          const {id,key,title,start,repeat,qualification}=event;
+          return {id,key,title,start,repeat,canStop:access.command||ownsSquadSeries(event,self,access,ctx)||
+            (qualification?access.assign(all.find(item=>item.key===qualification)):access.cadre)};
+        });
     }
     if (view==='attendance' && canStaff) {
       payload.courseTemplates=Object.values(state.courses).filter(course=>access.assign(qualification(state,course.qualification,ctx)))
@@ -597,7 +607,8 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         const event=needEvent(ctx,input.event);
         const qual=qualification(state,event.qualification,ctx);
         check(event.repeat && !event.repeatStopped,'This training has no active repeat schedule.',409);
-        check(access.command||access.cadre&&(!event.qualification||access.assign(qual)),'The matching Training Cadre role is required.',403);
+        check(access.command||ownsSquadSeries(event,actor,access,ctx)||access.cadre&&(!event.qualification||access.assign(qual)),
+          'Only the Squad Leader who scheduled the session or authorised training staff can stop the repeat.',403);
         enqueue('stop-training:'+event.id,'stop-training',{actor,event:event.id});
         return {};
       }
@@ -608,7 +619,9 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         const generic=['squad','unit'].includes(key);
         const qual=qualification(state,key,ctx);
         check(generic||qual,'Choose a training type.');
-        check(access.command||access.cadre&&(generic||access.assign(qual)),'The matching Training Cadre role is required.',403);
+        const canStaff=access.command||access.cadre&&(generic||access.assign(qual));
+        const squadOnly=!canStaff&&access.squadLeader&&key==='squad'&&!course;
+        check(canStaff||squadOnly,'Only Squad Leaders can schedule their squad training. Other training requires matching Cadre access.',403);
         check(!course?.archivedAt,'Restore the course before scheduling a session.',409);
         const title=str(input.title??course?.name,'Training name',120);
         const repeat=input.repeat??'none';
@@ -617,6 +630,11 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         const squads=unique(list(input.squads??[],50,'selected squads'));
         const people=unique(list(input.people??[],500,'selected members'));
         const inviteRecruits=input.inviteRecruits===true;
+        const ledSquads=ctx.ledSquads??[];
+        if (squadOnly) {
+          check(ledSquads.length && squads.every(key=>ledSquads.includes(key)) && !people.length && !inviteRecruits,
+            'Squad Leaders must have an active Squad Leader roster slot and can only invite their own squad.',403);
+        }
         check(!inviteRecruits||['t1','t2'].includes(key),'Recruit role invitations are available for Basic Training.');
         check(squads.every(key=>ctx.squads?.some(item=>item.key===key))&&people.every(key=>Object.hasOwn(ctx.members,key)),
           'Choose existing squads and TAG members.');
@@ -632,7 +650,8 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
           Number.isInteger(input.instructors)&&input.instructors>=0&&input.instructors<=99,'Choose valid attendee and cadre capacities.');
         state.limits['training:'+event]=extraSeatLimit(input.limit??(generic?0:1));
         enqueue('schedule:'+event,'schedule',{actor,event,title,qualification:generic?null:key,trainingTrack:generic?key:null,
-          day:eventDay,time:input.time,places:input.places,instructors:input.instructors,channel,repeat,squads,people,inviteRecruits});
+          day:eventDay,time:input.time,places:input.places,instructors:input.instructors,channel,repeat,squads,people,inviteRecruits,
+          ...(squadOnly?{squadLeaderScope:squads.length?squads:[ledSquads[0]]}:{})});
         return {id:event};
       }
       case 'assessment':
@@ -1122,7 +1141,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
       }
       const view=url.searchParams.get('view')||'orders';
       const result=overview(state,ctx,member,access,view);
-      if (view==='training' && (access.command||access.cadre)) {
+      if (view==='training' && (access.command||access.cadre||access.squadLeader&&ctx.ledSquads?.length)) {
         try { result.channels=await getChannels(member.user.id); }
         catch { result.channels=[]; result.channelsUnavailable=true; }
       }

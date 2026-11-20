@@ -288,6 +288,9 @@ function staffLanding(response,path,access) {
       ['Schedule training',unit('training'),'Create Basic Training, specialist or squad sessions and choose who to invite.'],
       ['Attendance & sign-off',unit('attendance'),'Record attendance and candidate results.'],
     ]:[]),
+    ...(!access.command&&!access.cadre&&access.squadLeader?[
+      ['Schedule squad training',unit('training'),'Create a session and invite your assigned squad.'],
+    ]:[]),
     ...(access.administrative?[['Schedule Sunday platoon training',tools('platoon','training'),'Choose a date, time and participating groups.']]:[]),
     ...(access.leader||access.cadre?[['Candidate records',unit('records'),'Review available assessments.']]:[]),
     ...(access.reviews?[['Review applications',unit('application-review'),'Decide applications for qualifications you oversee.']]:[]),
@@ -911,6 +914,7 @@ async function unitContext(member) {
     if (!title || entry.archived || entry.removed?.includes(Number(num)) || !members[id]) return [];
     return [{group,id,title,unit:groupUnit(group,entry)}];
   });
+  const ledSquads=assignments.filter(row=>row.id===mId&&/^squad lead(?:er)?\b/i.test(row.title)).map(row=>row.group);
   const unitLeaders={};
   const leaderSlot=title=>/\b(?:team lead(?:er)?|squad lead(?:er)?|pilot lead|lead pilot|detachment lead(?:er)?|unit commander|platoon commander|platoon sergeant)\b/i.test(title);
   for (const [key] of Object.entries(units)) {
@@ -960,7 +964,7 @@ async function unitContext(member) {
         confirmed:[...new Set(Object.values(event.seats??{}).filter(item=>item?.status==='confirmed'&&item.memberId).map(item=>item.memberId))],
         leads:Object.entries(leaderMembers).map(([id,groups])=>({id,groups,name:members[id]?.name??'TAG leader'})),
         people:registerPeople(event,sunday?'sunday':'training',groups).map(([person])=>person),candidates:recruits,
-        basicStage,qualification,repeat:event.repeat,repeatStopped:!!event.repeatStopped,priorityLimit:event.priorityLimit,results:record(event.results),
+        basicStage,qualification,repeat:event.repeat,scheduleActor:event.scheduleActor,squadLeaderScope:event.squadLeaderScope,repeatStopped:!!event.repeatStopped,priorityLimit:event.priorityLimit,results:record(event.results),
         marks:Object.fromEntries(Object.entries(record(event.attendance)).map(([person,mark])=>[person,mark?.status])),
         onLeave(person) {
           if (!person) return false;
@@ -978,6 +982,6 @@ async function unitContext(member) {
     available:!roster.unavailable,directoryFresh:Number(source.directoryUpdatedAt)>Date.now()-2*3600_000,guild:TAG_GUILD_ID,
     roles:{command:COMMAND_ROLE_ID,cadre:TRAINING_CADRE_ROLE_ID,team:campaign.roles.team,squad:campaign.roles.squad},
     qualifications:Object.fromEntries(qualificationEntries.map(([key,{name,roleId}])=>[key,{name,discordRole:roleId}])),
-    events,members,squads:enabledGroups.map(([key,group])=>({key,label:group.label})),findings:campaign.findings,canAar:campaign.canAar,campaign:campaign.active,map:campaign.map,reports:campaign.reports,vacancies,units,unitLeaders,
+    events,members,ledSquads,squads:enabledGroups.map(([key,group])=>({key,label:group.label})),findings:campaign.findings,canAar:campaign.canAar,campaign:campaign.active,map:campaign.map,reports:campaign.reports,vacancies,units,unitLeaders,
   };
 }

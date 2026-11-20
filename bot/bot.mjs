@@ -3159,7 +3159,7 @@ function startWebsiteBridge(guild) {
           ? send(200,'Your attendance is confirmed.') : send(409,'This confirmation is no longer available.');
       }
       if (action==='training-channels') {
-        if (!staff && !canOpenSignoff(member)) return send(403,'Staff access required.');
+        if (!staff && !canOpenSignoff(member) && !ledTrainingSquads(member).length) return send(403,'Training access required.');
         const channels=await guild.channels.fetch();
         return send(200,[...channels.values()].filter(channel=>trainingChannelAllowed(channel,guild,member))
           .map(({id,name})=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)));
@@ -3727,6 +3727,30 @@ function opsState() {
 function clubRole(member,role) {
   return Boolean(role && (Array.isArray(member?.roles) ? member.roles.includes(role) : member?.roles?.cache?.has(role)));
 }
+let campaignDatabase;
+function ledTrainingSquads(member) {
+  const led=Object.entries(sundayData.standing).flatMap(([seat,id])=>{
+    if (id!==member.id) return [];
+    const [key,slot]=seat.split(':');
+    const group=rosterGroups[key];
+    return group&&!group.archived&&!group.removed?.includes(Number(slot))&&
+      /^squad lead(?:er)?\b/i.test(group.slots[Number(slot)-1]??'')?[key]:[];
+  });
+  if (!led.length) return [];
+  try {
+    campaignDatabase??=new DatabaseSync(new URL('./campaign-workspace.sqlite',import.meta.url),{readOnly:true});
+    const row=campaignDatabase.prepare('SELECT json FROM state WHERE id=1').get();
+    return clubRole(member,row&&JSON.parse(row.json).roles.squad)?led:[];
+  } catch (error) {
+    if (error.code==='ERR_SQLITE_ERROR') return [];
+    throw error;
+  }
+}
+function squadTrainingAllowed(member,scope) {
+  if (!scope?.length) return false;
+  const led=ledTrainingSquads(member);
+  return scope.every(key=>led.includes(key));
+}
 function unitStageRole(member,stage) {
   return clubRole(member,opsState()?.settings.roles[stage] || process.env['BASIC_TRAINING_CADRE_'+stage.toUpperCase()+'_ROLE_ID']);
 }
@@ -3804,7 +3828,8 @@ async function runUnitJob(guild,key) {
       const event=sessions[job.event];
       unitCheck(event?.repeatSeries,404,'Training repeat schedule unavailable.');
       const specialty=event.stage || (opsState()?.settings.qualifications[event.unitQualification]?.specialty??defaultSpecialties[event.unitQualification]);
-      unitCheck(clubRole(actor,COMMAND_ROLE_ID) || (event.trainingTrack?
+      unitCheck(clubRole(actor,COMMAND_ROLE_ID) ||
+        (event.scheduleActor===actor.id&&squadTrainingAllowed(actor,event.squadLeaderScope)) || (event.trainingTrack?
         canOpenSignoff(actor):specialty&&clubRole(actor,opsState()?.settings.roles[specialty])),403,'The matching cadre role is required.');
       const next={...sessions};
       for (const [id,session] of Object.entries(sessions)) {
@@ -3819,8 +3844,15 @@ async function runUnitJob(guild,key) {
       const stage=['t1','t2'].includes(job.qualification)?job.qualification:null;
       const qual=settings?.qualifications[job.qualification];
       const stageRole=stage || (qual?.specialty??defaultSpecialties[job.qualification]);
-      unitCheck(clubRole(actor,COMMAND_ROLE_ID) || (job.trainingTrack?canOpenSignoff(actor):stageRole&&clubRole(actor,settings?.roles[stageRole])),
-        403,'The matching cadre role is no longer authorised.');
+      if (job.squadLeaderScope) {
+        unitCheck(job.trainingTrack==='squad'&&!job.inviteRecruits&&!job.people?.length&&
+          (job.squads??[]).every(key=>job.squadLeaderScope.includes(key))&&squadTrainingAllowed(actor,job.squadLeaderScope),
+          403,'You can only schedule training and send invitations for the squad you lead.');
+      } else {
+        unitCheck(clubRole(actor,COMMAND_ROLE_ID) ||
+          (job.trainingTrack?canOpenSignoff(actor):stageRole&&clubRole(actor,settings?.roles[stageRole])),
+          403,'The matching cadre role is no longer authorised.');
+      }
       if (sessions[job.event]?.messageId) return 'Session already posted.';
       const start=parseUkStart(job.day,job.time);
       unitCheck(start>Date.now(),409,'The scheduled UK start time is invalid or has passed.');
@@ -3830,12 +3862,12 @@ async function runUnitJob(guild,key) {
       const channelId=job.channel||defaultChannel;
       const channel=await guild.channels.fetch(channelId);
       unitCheck(channel?.isSendable()&&channel.guildId===guild.id,403,'The training channel is not available to the bot.');
-      if (job.channel) unitCheck(trainingChannelAllowed(channel,guild,actor),403,'You or the bot cannot post training in this channel.');
+      if (job.channel || job.squadLeaderScope) unitCheck(trainingChannelAllowed(channel,guild,actor),403,'You or the bot cannot post training in this channel.');
       const priorityLimit=opsState()?.limits['training:'+job.event];
       const session=sessions[job.event]??{
         type:job.title,stage,start,recruitSlots:job.places,cadreSlots:job.instructors,trainingTrack:job.trainingTrack??undefined,
         channelId,bookings:{},scheduleActor:job.actor,customPostingChannel:!!job.channel,priorityLimit,
-        invitedSquads:job.squads??[],invitedPeople:job.people??[],inviteRecruits:!!stage&&job.inviteRecruits===true,
+        invitedSquads:job.squads??[],invitedPeople:job.people??[],squadLeaderScope:job.squadLeaderScope,inviteRecruits:!!stage&&job.inviteRecruits===true,
         ...(!stage&&job.qualification?{unitQualification:job.qualification}: {}),
         ...(job.repeat&&job.repeat!=='none'?{repeat:job.repeat,repeatSeries:job.event,repeatDay:job.day,repeatTime:job.time,repeatAnchor:Number(job.day.slice(-2))}:{}),
       };
@@ -4034,10 +4066,11 @@ async function advanceTrainingSeries(now) {
       const nextId=pending?.[0]??createHash('sha256').update(prior.repeatSeries+':'+next.day).digest('hex').slice(0,32);
       const channel=await client.channels.fetch(trainingChannelId(prior));
       if (!channel?.isSendable() || channel.guildId!==TAG_TEST_SERVER_ID) continue;
-      if (prior.customPostingChannel) {
+      if (prior.customPostingChannel || prior.squadLeaderScope) {
         const guild=await client.guilds.fetch(TAG_TEST_SERVER_ID);
         const actor=await jobMember(guild,prior.scheduleActor,true);
-        if (!actor || !trainingChannelAllowed(channel,guild,actor)) continue;
+        if (!actor || (prior.squadLeaderScope && !squadTrainingAllowed(actor,prior.squadLeaderScope)) ||
+          !trainingChannelAllowed(channel,guild,actor)) continue;
       }
       if (!sessions[id] || sessions[id].repeatStopped || sessions[id].repeatNext) continue;
 
@@ -4047,7 +4080,7 @@ async function advanceTrainingSeries(now) {
         recruitSlots:prior.recruitSlots,cadreSlots:prior.cadreSlots,priorityLimit:prior.priorityLimit,bookings:{},
         repeat:prior.repeat,repeatSeries:prior.repeatSeries,repeatPrevious:id,repeatDay:next.day,repeatTime:prior.repeatTime,
         repeatAnchor:prior.repeatAnchor,invitedSquads:prior.invitedSquads,invitedPeople:prior.invitedPeople,
-        inviteRecruits:prior.inviteRecruits,
+        squadLeaderScope:prior.squadLeaderScope,inviteRecruits:prior.inviteRecruits,
       };
       if (await postScheduledTraining(nextId,session,channel) && sessions[id]) saveSession(id,{...sessions[id],repeatNext:nextId});
     } catch (error) { console.error('Training series rollover failed:',error.message); }
@@ -4083,6 +4116,23 @@ async function sendTrainingInvitations(now) {
       }
     }
     const selected=new Set(recipients);
+    if (session.squadLeaderScope && recipients.some(memberId=>!sessions[id]?.inviteStatus?.[memberId])) {
+      try {
+        guild??=await client.guilds.fetch(TAG_TEST_SERVER_ID);
+        const actor=await jobMember(guild,session.scheduleActor,true);
+        if (!actor || actor.pending || actor.user.bot || !squadTrainingAllowed(actor,session.squadLeaderScope)) {
+          const current=sessions[id];
+          if (current) {
+            const skipped=Object.fromEntries(recipients.map(memberId=>[memberId,'skipped']));
+            saveSession(id,{...current,inviteStatus:{...skipped,...current.inviteStatus}});
+          }
+          continue;
+        }
+      } catch (error) {
+        console.error('Squad invitation authorisation failed:',error.message);
+        continue;
+      }
+    }
     for (const memberId of new Set([...selected,...recruits])) {
       const current=sessions[id];
       if (!current || current.start<=Date.now() || current.inviteStatus?.[memberId]) continue;
@@ -4092,6 +4142,7 @@ async function sendTrainingInvitations(now) {
         guild??=await client.guilds.fetch(TAG_TEST_SERVER_ID);
         const member=await jobMember(guild,memberId,true);
         if (!member || member.pending || member.user.bot || coveredByLeave(current,memberId) ||
+            (current.squadLeaderScope && !inviteRecipients(current).includes(memberId)) ||
             (!selected.has(memberId) && !clubRole(member,RECRUIT_ROLE_ID))) status='skipped';
         else {
           const channel=await client.channels.fetch(trainingChannelId(current));
