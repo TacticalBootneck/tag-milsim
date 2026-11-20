@@ -13,3 +13,4 @@ basic-training-sessions.json
 recruit-profiles.json
 sunday-rosters.json
 slot-role-overrides.json
+*.tmp
