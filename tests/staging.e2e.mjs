@@ -232,7 +232,11 @@ try {
     squads:['devgru-alpha'],people:[uid.alice,uid.pilot],channel:ordersChannel};
   await verify(await post(ordinary,recurring),403);
   await verify(await post(trainer,{...recurring,squads:['missing-squad']}),400);
+  await verify(await post(trainer,{...recurring,inviteRecruits:true}),400);
   await verify(await post(trainer,recurring));
+  const basicSeries=randomUUID();
+  await verify(await post(trainer,{...recurring,id:basicSeries,training:'t1',title:'Recruit DM Basic Training',
+    squads:[],people:[uid.student],inviteRecruits:true}));
   const taskId=randomUUID();
   const taskLink='/members/unit/?view=taskings&task='+taskId;
   await verify(await post(command,{action:'tasking',id:taskId,title:'DEVGRU game task',unit:'devgru',strength:'One team',
@@ -389,9 +393,12 @@ try {
   const first=readSessions()[series];
   assert.equal(first.channelId,ordersChannel);
   assert.equal(first.trainingTrack,'squad');
+  members.get(uid.pilot).roles.cache.set(rid.recruit,safeRole(rid.recruit));
   upkeep(); await delay(50); upkeep(); await delay(30);
   const invites=()=>captures.dms.filter(item=>item.message.content?.includes('Training invitation · Alpha Communications Practice'));
   assert.deepEqual(invites().map(item=>item.id).sort(),[uid.alice,uid.pilot].sort());
+  const recruitInvites=()=>captures.dms.filter(item=>item.message.content?.includes('Training invitation · Recruit DM Basic Training'));
+  assert.deepEqual(recruitInvites().map(item=>item.id).sort(),[uid.student,uid.pilot].sort());
   const actor=members.get(uid.alice);
   await globalThis.tagFixture.client.listeners('InteractionCreate')[0]({
     customId:'bt:recruit:'+series,isButton:()=>true,isChatInputCommand:()=>false,isStringSelectMenu:()=>false,isAutocomplete:()=>false,isModalSubmit:()=>false,
@@ -403,6 +410,7 @@ try {
   upkeep(); await delay(50);
   assert.ok(!readSessions()[series].repeatNext);
   clock++;
+  members.get(uid.pilot).roles.cache.delete(rid.recruit);
   upkeep(); await delay(50); upkeep(); await delay(30);
   const completed=readSessions()[series];
   assert.ok(completed.cardRemoved);
@@ -413,6 +421,8 @@ try {
   assert.equal(repeat.channelId,ordersChannel);
   assert.deepEqual(repeat.bookings,{});
   assert.deepEqual(invites().map(item=>item.id).sort(),[uid.alice,uid.alice,uid.pilot,uid.pilot].sort());
+  assert.equal(readSessions()[readSessions()[basicSeries].repeatNext].inviteRecruits,true);
+  assert.deepEqual(recruitInvites().map(item=>item.id).sort(),[uid.student,uid.student,uid.pilot].sort());
   const currentTrainer=await login('trainer');
   await verify(await post(currentTrainer,{action:'stop-training-series',event:'training:'+completed.repeatNext}));
   await deliveries();

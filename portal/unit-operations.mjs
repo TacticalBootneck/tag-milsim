@@ -606,6 +606,8 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         const channel=role(input.channel??'');
         const squads=unique(list(input.squads??[],50,'selected squads'));
         const people=unique(list(input.people??[],500,'selected members'));
+        const inviteRecruits=input.inviteRecruits===true;
+        check(!inviteRecruits||['t1','t2'].includes(key),'Recruit role invitations are available for Basic Training.');
         check(squads.every(key=>ctx.squads?.some(item=>item.key===key))&&people.every(key=>Object.hasOwn(ctx.members,key)),
           'Choose existing squads and TAG members.');
         const event=id(input.id,'event');
@@ -620,7 +622,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
           Number.isInteger(input.instructors)&&input.instructors>=0&&input.instructors<=99,'Choose valid attendee and cadre capacities.');
         state.limits['training:'+event]=extraSeatLimit(input.limit??(generic?0:1));
         enqueue('schedule:'+event,'schedule',{actor,event,title,qualification:generic?null:key,trainingTrack:generic?key:null,
-          day:eventDay,time:input.time,places:input.places,instructors:input.instructors,channel,repeat,squads,people});
+          day:eventDay,time:input.time,places:input.places,instructors:input.instructors,channel,repeat,squads,people,inviteRecruits});
         return {id:event};
       }
       case 'assessment':

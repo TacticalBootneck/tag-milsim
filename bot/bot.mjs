@@ -1191,15 +1191,25 @@ client.on(Events.GuildMemberRemove, member=>{
   saveSunday({...sundayData,discordMemberNames:names,discordMemberRoles:roles,unitDirectory});
 });
 
+async function* discordMemberPages(guild) {
+  let after;
+  while (true) {
+    const page=await guild.members.list({limit:1000,after,cache:false});
+    yield page;
+    if (page.size<1000) return;
+    const last=[...page.keys()].reduce((max,id)=>BigInt(id)>BigInt(max)?id:max,'0');
+    if (last===after) throw new Error('Discord member pagination did not advance.');
+    after=last;
+  }
+}
+
 async function refreshDiscordMemberNames(guild) {
   if (directorySync) return directorySync;
   if (Date.now() < directoryRetryAt || Date.now()-(sundayData.discordMemberNamesAt ?? 0) < 5*60_000) return;
   directorySync = (async()=>{
     const names = {};
     const roles = {};
-    let after;
-    while (true) {
-      const page = await guild.members.list({limit:1000,after,cache:false});
+    for await (const page of discordMemberPages(guild)) {
       for (const member of page.values()) {
         if (!member.pending && !member.user.bot) {
           const row=directoryMember(member);
@@ -1207,10 +1217,6 @@ async function refreshDiscordMemberNames(guild) {
           roles[member.id]=row.roles;
         }
       }
-      if (page.size < 1000) break;
-      const last = [...page.keys()].reduce((max,id)=>BigInt(id)>BigInt(max)?id:max,'0');
-      if (last === after) throw new Error('Discord member pagination did not advance.');
-      after=last;
     }
     for (const [id,row] of namesChangedDuringSync) {
       if (row) { names[id]=row.name; roles[id]=row.roles; }
@@ -3829,7 +3835,7 @@ async function runUnitJob(guild,key) {
       const session=sessions[job.event]??{
         type:job.title,stage,start,recruitSlots:job.places,cadreSlots:job.instructors,trainingTrack:job.trainingTrack??undefined,
         channelId,bookings:{},scheduleActor:job.actor,customPostingChannel:!!job.channel,priorityLimit,
-        invitedSquads:job.squads??[],invitedPeople:job.people??[],
+        invitedSquads:job.squads??[],invitedPeople:job.people??[],inviteRecruits:!!stage&&job.inviteRecruits===true,
         ...(!stage&&job.qualification?{unitQualification:job.qualification}: {}),
         ...(job.repeat&&job.repeat!=='none'?{repeat:job.repeat,repeatSeries:job.event,repeatDay:job.day,repeatTime:job.time,repeatAnchor:Number(job.day.slice(-2))}:{}),
       };
@@ -4041,6 +4047,7 @@ async function advanceTrainingSeries(now) {
         recruitSlots:prior.recruitSlots,cadreSlots:prior.cadreSlots,priorityLimit:prior.priorityLimit,bookings:{},
         repeat:prior.repeat,repeatSeries:prior.repeatSeries,repeatPrevious:id,repeatDay:next.day,repeatTime:prior.repeatTime,
         repeatAnchor:prior.repeatAnchor,invitedSquads:prior.invitedSquads,invitedPeople:prior.invitedPeople,
+        inviteRecruits:prior.inviteRecruits,
       };
       if (await postScheduledTraining(nextId,session,channel) && sessions[id]) saveSession(id,{...sessions[id],repeatNext:nextId});
     } catch (error) { console.error('Training series rollover failed:',error.message); }
@@ -4049,12 +4056,34 @@ async function advanceTrainingSeries(now) {
 
 async function sendTrainingInvitations(now) {
   let guild;
+  let recruitIds;
   let remaining=24;
   for (const [id,session] of Object.entries(sessions)) {
     if (!session.messageId || session.cardRemoved || session.start<=now || !session.scheduleActor) continue;
     const recipients=session.inviteRecipients??inviteRecipients(session);
     if (!session.inviteRecipients) saveSession(id,{...session,inviteRecipients:recipients});
-    for (const memberId of recipients) {
+    let recruits=session.recruitInviteRecipients??[];
+    if (session.inviteRecruits && !session.recruitInviteRecipients) {
+      try {
+        guild??=await client.guilds.fetch(TAG_TEST_SERVER_ID);
+        if (!recruitIds) {
+          const ids=[];
+          for await (const page of discordMemberPages(guild)) {
+            for (const member of page.values()) {
+              if (!member.pending && !member.user.bot && clubRole(member,RECRUIT_ROLE_ID)) ids.push(member.id);
+            }
+          }
+          recruitIds=ids;
+        }
+        if (sessions[id]?.messageId!==session.messageId || sessions[id]?.start!==session.start) continue;
+        recruits=recruitIds;
+        saveSession(id,{...sessions[id],recruitInviteRecipients:recruits});
+      } catch (error) {
+        console.error('Recruit invitation lookup failed:',error.message);
+      }
+    }
+    const selected=new Set(recipients);
+    for (const memberId of new Set([...selected,...recruits])) {
       const current=sessions[id];
       if (!current || current.start<=Date.now() || current.inviteStatus?.[memberId]) continue;
       if (remaining--<=0) return;
@@ -4062,7 +4091,8 @@ async function sendTrainingInvitations(now) {
       try {
         guild??=await client.guilds.fetch(TAG_TEST_SERVER_ID);
         const member=await jobMember(guild,memberId,true);
-        if (!member || member.pending || member.user.bot || coveredByLeave(current,memberId)) status='skipped';
+        if (!member || member.pending || member.user.bot || coveredByLeave(current,memberId) ||
+            (!selected.has(memberId) && !clubRole(member,RECRUIT_ROLE_ID))) status='skipped';
         else {
           const channel=await client.channels.fetch(trainingChannelId(current));
           const canView=channel?.permissionsFor?.(member)?.has('ViewChannel')!==false;

@@ -223,4 +223,12 @@ test('Training form submits custom name, channel, cadence, squad and member sele
   assert.equal(training.submitted[0].repeat,'fortnightly');
   assert.deepEqual(training.submitted[0].squads,['alpha']);
   assert.deepEqual(training.submitted[0].people,[id]);
+  assert.equal(training.submitted[0].inviteRecruits,false);
+  label(training.root,'Training type').value='t1';
+  label(training.root,'Training type').onchange();
+  const recruits=label(training.root,'Invite recruits by DM');
+  assert.equal(recruits.disabled,false);
+  recruits.checked=true;
+  await submit(requireButton(training.root,'Schedule and post to Discord'));
+  assert.equal(training.submitted[1].inviteRecruits,true);
 });

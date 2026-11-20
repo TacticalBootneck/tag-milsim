@@ -416,12 +416,19 @@ function trainingSchedule() {
   const places=number('Standard attendee places',12,1,99);
   const cadre=number('Cadre places',1,0,99);
   const limit=number('Extra priority places',1,0,9);
-  const sync=()=>{ limit.disabled=['','squad','unit','t1','t2'].includes(training.value); };
-  training.onchange=sync;
-  sync();
   const recipients=card(editor,'Discord invitation recipients',true);
   recipients.open=true;
-  recipients.append(el('p','Select squads, individual members or both. Each person gets one invite per session. Booked attendees get the usual start reminders.'));
+  recipients.append(el('p','Each person gets one invite per session. Booked attendees get the usual start reminders.'));
+  const recruitGroup=el('fieldset');
+  recruitGroup.append(el('legend','Discord role'));
+  const recruits=field(recruitGroup,'Invite recruits by DM',{type:'checkbox'});
+  recipients.append(recruitGroup);
+  const sync=()=>{
+    limit.disabled=['','squad','unit','t1','t2'].includes(training.value);
+    recruitGroup.hidden=recruits.disabled=!['t1','t2'].includes(training.value);
+  };
+  training.onchange=sync;
+  sync();
   const squads=el('fieldset');
   squads.append(el('legend','Squads'));
   const squadChoices=data.squads.map(({key,label})=>[key,field(squads,label,{type:'checkbox'})]);
@@ -438,7 +445,7 @@ function trainingSchedule() {
   submit(editor,'Schedule and post to Discord',()=>({action:'schedule-training',id:event,training:training.value,title:title.value,
     day:date.value,time:time.value,places:places.valueAsNumber,instructors:cadre.valueAsNumber,limit:limit.disabled?0:limit.valueAsNumber,
     channel:channel.value,repeat:repeat.value,squads:squadChoices.filter(([,input])=>input.checked).map(([key])=>key),
-    people:memberChoices.filter(([, ,input])=>input.checked).map(([id])=>id)}),
+    people:memberChoices.filter(([, ,input])=>input.checked).map(([id])=>id),inviteRecruits:!recruits.disabled&&recruits.checked}),
     'Training queued. The bot will post it and send the selected invitations.');
   const series=card(content,'Upcoming repeat schedules');
   if (!data.series.length) series.append(el('p','No recurring training is currently posted.'));
