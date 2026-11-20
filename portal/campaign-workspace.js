@@ -532,8 +532,6 @@ function render() {
   const {campaign,active,archive} = workspace;
   const operational=aarPage || params.get('manage')==='1';
   const command=workspace.command && operational;
-  const back=document.querySelector('#campaign-operations-back');
-  if (back) back.hidden=!(operational && (workspace.command || workspace.types.length));
   const current = campaign && active === campaign.id;
   root.replaceChildren();
   if (aarPage) {

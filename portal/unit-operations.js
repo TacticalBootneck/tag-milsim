@@ -1,6 +1,5 @@
 'use strict';
 
-const tabs=document.querySelector('#unit-tabs');
 const status=document.querySelector('#unit-status');
 const content=document.querySelector('#unit-content');
 const query=new URLSearchParams(location.search);
@@ -524,7 +523,7 @@ function candidateRecords() {
           render();
         })]:[]));
       editCourse(box,course);
-      if (!course.archivedAt) box.append(link('Schedule a session',unitLink('training',{type:course.qualification,title:course.name})));
+      if (!course.archivedAt) box.append(link('Schedule a session',unitLink('training',{type:course.qualification,title:course.name,from:'courses'})));
       box.append(button(course.archivedAt?'Restore course':'Archive course',()=>save(()=>confirm('Change this course’s archive status?')?
         {action:'course-archive',course:course.id,restore:!!course.archivedAt}:null)));
     }
@@ -1055,14 +1054,6 @@ function render() {
   content.replaceChildren();
   const pageTitle=document.querySelector('#unit-title');
   if (pageTitle) pageTitle.textContent=views[view]??'Unit operations';
-  const section=['training','courses','records','attendance','application-review'].includes(view)?'training'
-    : ['command','honours-review'].includes(view)?'administration'
-      : ['taskings','orders','gm'].includes(view)?'operations':null;
-  const {command:isCommand,cadre,leader,gameMaster,reviews,honours}=data.access;
-  const canReturn=section==='training'?(isCommand||cadre||leader||reviews)
-    : section==='operations'?(isCommand||cadre||leader||gameMaster)
-      : section==='administration'?(isCommand||honours):false;
-  tabs.replaceChildren(...(canReturn?[link({training:'Training',operations:'Operations',administration:'Administration'}[section],'/staff/'+section+'/')]:[]));
   if (!data.views.includes(view)) {
     content.append(el('p','This area is unavailable for your roles.'));
     return;

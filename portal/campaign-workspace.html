@@ -7,14 +7,15 @@
   <link rel="stylesheet" href="/site.css">
   <link rel="stylesheet" href="/dashboard.css?v=unit-dashboard-controls">
   <link rel="stylesheet" href="/campaign-workspace.css?v=1">
-  <script src="/campaign-workspace.js?v=dashboard-nav" defer></script>
+  <script src="/campaign-workspace.js?v=back-nav" defer></script>
 </head>
 <body>
   <header class="top"><div class="wrap top-inner">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><strong>TAG MILSIM</strong></a>
-    <div class="portal-header-actions"><a class="button outline small" href="/members/">Members Dashboard</a><a class="button outline small" id="campaign-operations-back" href="/staff/operations/" hidden>Operations</a></div>
+    <div class="portal-header-actions"><a class="button outline small" href="/members/">Members Dashboard</a></div>
   </div></header>
   <main class="wrap section" id="workspace">
+    <nav class="quick-nav" aria-label="Back navigation">__TAG_BACK_BUTTON__</nav>
     <h1>Campaign workspace</h1>
     <p id="workspace-status" role="status">Loading the campaign…</p>
     <div id="workspace-content"></div>

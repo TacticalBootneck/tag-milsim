@@ -51,9 +51,32 @@ function savedReturn(request) {
   try { return returnPath(decodeURIComponent(cookies(request)[returnCookie] ?? '')); }
   catch { return '/members/'; }
 }
+function backButton(href,label) {
+  return '<a class="button outline small" href="'+href+'">← Back to '+label+'</a>';
+}
+async function serveWithBack(response,path,back) {
+  const html=await readFile(new URL(path,import.meta.url),'utf8');
+  return reply(response,200,html.replace('__TAG_BACK_BUTTON__',back),'text/html; charset=utf-8');
+}
+function unitBack(params,access) {
+  const view=params.get('view')??'orders';
+  if (view==='orders' && params.get('from')==='schedule') return backButton('/members/#my-schedule','My schedule');
+  if (view==='orders' && params.get('from')==='events') return backButton('/members/#events','Upcoming events');
+  if (view==='training' && params.get('from')==='courses' && (access.command||access.cadre)) {
+    return backButton('/members/unit/?view=courses','Courses &amp; assessment forms');
+  }
+  if ((['command','honours-review'].includes(view) || view==='honours' && params.has('nomination')) && access.administration) {
+    return backButton('/staff/administration/','Administration');
+  }
+  if (['training','courses','records','attendance','application-review'].includes(view) && access.training) {
+    return backButton('/staff/training/','Training');
+  }
+  if (['orders','taskings','gm'].includes(view) && access.operations) return backButton('/staff/operations/','Operations');
+  return backButton('/members/','Members Dashboard');
+}
 function featureSignin(response,url) {
   const destination=encodeURIComponent(returnPath(url.pathname+url.search));
-  return reply(response,200,'<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>TAG sign-in</title><link rel="stylesheet" href="/site.css"><main class="wrap section"><h1>TAG MILSIM</h1><p>Sign in to open this member page.</p><a class="button primary" href="/auth/discord?next='+destination+'">Sign in with Discord</a></main></html>','text/html; charset=utf-8');
+  return reply(response,200,'<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>TAG sign-in</title><link rel="stylesheet" href="/site.css"><main class="wrap section">'+backButton('/members/','Members Dashboard')+'<h1>TAG MILSIM</h1><p>Sign in to open this member page.</p><a class="button primary" href="/auth/discord?next='+destination+'">Sign in with Discord</a></main></html>','text/html; charset=utf-8');
 }
 const cookie = (name, value, age) => name + '=' + value + '; Path=/; Max-Age=' + age + '; Secure; HttpOnly; SameSite=Lax';
 function cookies(request) {
@@ -297,12 +320,12 @@ function staffLanding(response,path,access) {
   const [title,cards]=pages[path];
   if (!cards.length) return reply(response,403,'This area is unavailable for your roles.');
   const links=cards.map(([label,url,description])=>'<a class="dashboard-tile" href="'+url+'"><strong>'+label+'</strong><span>'+description+'</span></a>').join('');
-  const back=path==='/staff/'?'':'<a class="button outline small" href="/staff/">Unit Dashboard</a>';
+  const back=path==='/staff/'?backButton('/members/','Members Dashboard'):backButton('/staff/','Unit Dashboard');
   return reply(response,200,'<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'+
     title+' | TAG MILSIM</title><link rel="stylesheet" href="/site.css"><link rel="stylesheet" href="/dashboard.css?v=dashboard-nav">'+
     '<header class="top"><div class="wrap top-inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><strong>TAG MILSIM</strong></a>'+
-    '<div class="portal-header-actions">'+back+'<a class="button outline small" href="/members/">Members Dashboard</a></div></div></header>'+
-    '<main class="wrap section"><h1>'+title+'</h1><nav class="dashboard-tiles" aria-label="'+title+'">'+links+'</nav></main></html>',
+    '<div class="portal-header-actions">'+(path==='/staff/'?'':'<a class="button outline small" href="/members/">Members Dashboard</a>')+'</div></div></header>'+
+    '<main class="wrap section"><nav class="quick-nav" aria-label="Back navigation">'+back+'</nav><h1>'+title+'</h1><nav class="dashboard-tiles" aria-label="'+title+'">'+links+'</nav></main></html>',
     'text/html; charset=utf-8');
 }
 async function dashboardAction(request, response, member) {
@@ -600,7 +623,7 @@ async function memberData(member, view) {
     unitDashboard:Object.values(unitNavigation(member)).some(Boolean),
     myCard:toCard(id,{name:currentName,status:progression}),
     mySchedule:[...upcomingOperations,...upcomingTraining].filter(event=>['Attending','Awaiting confirmation','Booked','Waitlisted'].includes(event.status))
-      .sort((a,b)=>a.start-b.start).slice(0,30).map(({title,start,status,url,orders})=>({title,start,status,url,orders})),
+      .sort((a,b)=>a.start-b.start).slice(0,30).map(({title,start,status,url,orders})=>({title,start,status,url,orders:orders?orders+'&from=schedule':null})),
     qualifications: [...new Set([...Object.values(rosterData.courses).filter(course => roles.has(course.roleId)&&!awardView.revokedRoles(id).includes(course.roleId)).map(course => course.name),
       ...awardView.names(id)])],
     training: results.filter(item=>!item.results[id].unitAssessment).slice(0,12).map(item => ({
@@ -611,7 +634,7 @@ async function memberData(member, view) {
       title: event.title, status: { attended:'Attended', absent:'Failed to attend', loa:'LOA' }[event.attendance[id].status] ?? 'Recorded',
     })),
     events: [...upcomingOperations,...upcomingTraining].sort((a,b)=>a.start-b.start).slice(0,30)
-      .map(({title,start,status,url,lineup,orders})=>({title,start,status,url,lineup,orders})),
+      .map(({title,start,status,url,lineup,orders})=>({title,start,status,url,lineup,orders:orders?orders+'&from=events':null})),
     ...rosterView(),
   };
 }
@@ -689,7 +712,7 @@ const server = createServer(async (request, response) => {
       const {data:roster}=await botData('sunday-rosters.json',prepareRoster);
       const removed=roster.participation?.[member.user.id]?.removedAt;
       if (removed && !(Date.parse(member.joined_at)>removed)) return reply(response,403,'TAG membership required.');
-      if (path==='/members/unit/') return await serve(response,'./unit-operations.html');
+      if (path==='/members/unit/') return await serveWithBack(response,'./unit-operations.html',unitBack(url.searchParams,unitNavigation(member)));
       return await unitOperations.handle(request,response,url,member);
     }
     const privateImage = /^\/members\/campaign-image\/([a-f0-9-]{36})$/.exec(path);
@@ -707,13 +730,15 @@ const server = createServer(async (request, response) => {
       if (removed && !(Date.parse(member.joined_at) > removed)) return reply(response,403,'TAG membership required.');
       if (privateImage) return campaignWorkspace.serveImage(response,privateImage[1],false);
       if (path === '/members/campaign/' || path === '/members/aar/') {
-        if (path === '/members/aar/' || url.searchParams.get('manage')==='1') {
+        const operational=path === '/members/aar/' || url.searchParams.get('manage')==='1';
+        if (operational) {
           const access=unitNavigation(member);
           if (!access.command && !access.leader) return reply(response,403,'A configured Team Leader, Squad Leader or Command role is required.');
         }
         response.setHeader('Content-Security-Policy', response.getHeader('Content-Security-Policy')+
           "; img-src 'self' blob:"+(mediaStore ? ' '+mediaStore.origin : ''));
-        return await serve(response,'./campaign-workspace.html');
+        return await serveWithBack(response,'./campaign-workspace.html',operational
+          ?backButton('/staff/operations/','Operations'):backButton('/members/','Members Dashboard'));
       }
       if (request.method === 'POST' && unavailable) return reply(response,503,'TAG membership records are temporarily unavailable.');
       const events = Object.entries(roster.events).filter(([,event])=>!event.cancelledAt)
@@ -741,7 +766,12 @@ const server = createServer(async (request, response) => {
         return reply(response,403,'Command access required.');
       }
       const html=await readFile(new URL('./staff.html',import.meta.url),'utf8');
-      return reply(response,200,html.replace('__TAG_LOGOUT_TOKEN__',session.logoutToken),'text/html; charset=utf-8');
+      const area=path.split('/')[2];
+      const labels={administration:'Administration',training:'Training',operations:'Operations'};
+      const back=tool==='attendance' && url.searchParams.get('from')==='history'
+        ?backButton('/staff/administration/tools/?tool=history','Event history'):backButton('/staff/'+area+'/',labels[area]);
+      return reply(response,200,html.replace('__TAG_LOGOUT_TOKEN__',session.logoutToken)
+        .replace('__TAG_BACK_BUTTON__',back),'text/html; charset=utf-8');
     }
     const pages = {'/members/':'dashboard.html','/members/directory/':'directory.html'};
     if (Object.hasOwn(pages,path) || path === '/api/member' || path === '/api/member/action') {

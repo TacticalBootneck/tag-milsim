@@ -949,14 +949,6 @@ function staffView(data) {
     assignments:'Standing assignments',campaign:'Public campaign updates'};
   const label=Object.hasOwn(titles,staffTool)?titles[staffTool]:null;
   document.querySelector('#staff-title').textContent=label??'Management';
-  const back=document.querySelector('#management-back');
-  if (staffTool==='platoon') {
-    back.href='/staff/training/';
-    back.textContent='Training';
-  } else if (['attendance','create','events','campaign'].includes(staffTool)) {
-    back.href='/staff/operations/';
-    back.textContent='Operations';
-  }
   if (!label || ['members','roster','assignments','campaign'].includes(staffTool) && data.access!=='Command') {
     staffContent.replaceChildren(node('p','This area is unavailable for your roles.'));
     return;
@@ -1023,7 +1015,7 @@ function staffView(data) {
           continue;
         }
         const history = node('a',event.title + ' · ' + shortDate.format(event.start));
-        history.href='/staff/operations/tools/?tool=attendance&event='+encodeURIComponent(event.key);
+        history.href='/staff/operations/tools/?tool=attendance&from=history&event='+encodeURIComponent(event.key);
         const line = row('', attended + ' attended');
         line.firstChild.replaceChildren(history);
         staffContent.append(line);

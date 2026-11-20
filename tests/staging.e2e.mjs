@@ -277,6 +277,30 @@ try {
   await verify(await get('/staff/',ordinary),403);
   await verify(await get('/members/aar/',ordinary),403);
   assert.ok((await verify(await get('/staff/operations/'))).includes('auth/discord?next=%2Fstaff%2Foperations%2F'));
+  const backChecks=[
+    ['/staff/',command,'/members/','Members Dashboard'],
+    ['/staff/administration/',command,'/staff/','Unit Dashboard'],
+    ['/staff/administration/tools/?tool=members',command,'/staff/administration/','Administration'],
+    ['/members/unit/?view=command',command,'/staff/administration/','Administration'],
+    ['/staff/operations/tools/?tool=attendance&from=history',command,'/staff/administration/tools/?tool=history','Event history'],
+    ['/staff/training/tools/?tool=platoon',trainer,'/staff/training/','Training'],
+    ['/members/unit/?view=courses',trainer,'/staff/training/','Training'],
+    ['/members/unit/?view=training&from=courses',trainer,'/members/unit/?view=courses','Courses &amp; assessment forms'],
+    ['/members/unit/?view=orders',alpha,'/staff/operations/','Operations'],
+    ['/members/unit/?view=orders&from=schedule',alpha,'/members/#my-schedule','My schedule'],
+    ['/members/unit/?view=orders&from=events',ordinary,'/members/#events','Upcoming events'],
+    ['/members/aar/',alpha,'/staff/operations/','Operations'],
+    ['/members/campaign/?manage=1',alpha,'/staff/operations/','Operations'],
+    ['/members/campaign/',ordinary,'/members/','Members Dashboard'],
+    ['/members/unit/?view=applications',ordinary,'/members/','Members Dashboard'],
+    ['/members/directory/',ordinary,'/members/','Members Dashboard'],
+    ['/members/',ordinary,'/','home'],
+  ];
+  for (const [page,session,target,label] of backChecks) {
+    const html=await verify(await get(page,session));
+    assert.ok(html.includes('href="'+target+'">← Back to '+label+'</a>'),page);
+    assert.ok(!html.includes('__TAG_BACK_BUTTON__'),page);
+  }
   const memberDashboard=await verify(await get(memberApi,ordinary));
   assert.equal(memberDashboard.unitDashboard,false);
   assert.ok(memberDashboard.myCard.name);
