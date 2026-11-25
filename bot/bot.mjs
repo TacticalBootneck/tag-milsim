@@ -3284,7 +3284,7 @@ function startWebsiteBridge(guild) {
         }, { refresh: false });
         return send(200, 'Leave approved.');
       }
-      if (['member-admin','member-role','member-rank'].includes(action)) {
+      if (['member-admin','member-role','member-rank','member-service'].includes(action)) {
         if (!command) return send(403, 'Command access required.');
         if (typeof values.member !== 'string' || !/^\d{17,20}$/.test(values.member)) return send(400, 'Choose a member.');
         const target = await guild.members.fetch({ user:values.member, force:true }).catch(() => null);
@@ -3306,6 +3306,53 @@ function startWebsiteBridge(guild) {
         }
         const canManage = role => role && role.id !== guild.id && role.editable && !role.managed &&
           role.permissions.bitfield === 0n && ![COMMAND_ROLE_ID,TRAINING_CADRE_ROLE_ID].includes(role.id);
+        const recordedOperations = () => Object.values(sundayData.events).filter(event =>
+          event.type==='operation' && !event.cancelledAt && event.start<=Date.now() &&
+          event.attendance?.[target.id]?.status==='attended').length;
+        if (action === 'member-service') {
+          const {totalOperations,previousHistorical,previousRecorded,completeProbation} = values;
+          if (!Number.isSafeInteger(totalOperations) || totalOperations<0 || totalOperations>100000 ||
+              typeof completeProbation!=='boolean') return send(400,'Enter a whole number of operations from 0 to 100,000.');
+          if (probationLocks.has(target.id)) return send(409,'Another service record update is in progress.');
+          probationLocks.add(target.id);
+          try {
+            const previous=sundayData.memberDetails?.[target.id]?.historicalOperations??0;
+            if (previousHistorical!==previous) return send(409,'This record changed. Reload it before saving.');
+            const recorded=recordedOperations();
+            if (recorded!==previousRecorded) return send(409,'New attendance was recorded. Reload before saving.');
+            if (totalOperations<recorded) return send(400,'The total must include the '+recorded+' operations already recorded in TAG.');
+            const historicalOperations=totalOperations-recorded;
+            let award=sundayData.probationAwards?.[target.id];
+            if (completeProbation) {
+              const heldFull=clubRole(target,SUNDAY_MEMBER_ROLE_ID);
+              const heldProbation=clubRole(target,PROBATIONARY_ROLE_ID);
+              if (!SUNDAY_MEMBER_ROLE_ID || !PROBATIONARY_ROLE_ID ||
+                  [RECRUIT_ROLE_ID,PROBATIONARY_ROLE_ID,RESERVE_ROLE_ID].includes(SUNDAY_MEMBER_ROLE_ID)) {
+                return send(409,'Configure distinct Full Member and Probationary roles.');
+              }
+              if (clubRole(target,RECRUIT_ROLE_ID)) return send(409,'Remove the Recruit role in Member Management before recording completed probation.');
+              if (!heldFull || heldProbation) {
+                const full=heldFull?null:await guild.roles.fetch(SUNDAY_MEMBER_ROLE_ID);
+                const probation=heldProbation?await guild.roles.fetch(PROBATIONARY_ROLE_ID):null;
+                if (!target.manageable || (!heldFull&&!canManage(full)) || (heldProbation&&!canManage(probation))) {
+                  return send(409,'The bot cannot update this member’s progression roles in Discord.');
+                }
+                if (!heldFull) await target.roles.add(full,'TAG historical probation recorded by '+actor);
+                if (heldProbation) await target.roles.remove(probation,'TAG historical probation recorded by '+actor);
+              }
+              award=sundayData.probationAwards?.[target.id];
+              award={staffId:actor,at:Date.now(),historical:true,...award,complete:true};
+            }
+            const editedAt=Date.now();
+            const details={...sundayData.memberDetails?.[target.id],historicalOperations,serviceEditedBy:actor,serviceEditedAt:editedAt};
+            saveSunday({...sundayData,memberDetails:{...sundayData.memberDetails,[target.id]:details},
+              ...(completeProbation?{probationAwards:{...sundayData.probationAwards,[target.id]:award}}:{})});
+            if (completeProbation) rememberDiscordMember(target);
+            return send(200,completeProbation?'Service record saved. Probation is complete.':'Service record saved.');
+          } finally {
+            probationLocks.delete(target.id);
+          }
+        }
         if (action === 'member-role') {
           if (typeof values.add !== 'boolean' || typeof values.role !== 'string' || !/^\d{17,20}$/.test(values.role)) return send(400, 'Choose a role.');
           const role = await guild.roles.fetch(values.role);
@@ -3321,7 +3368,11 @@ function startWebsiteBridge(guild) {
           attendanceExempt:sundayData.memberDetails?.[target.id]?.attendanceExempt === true,
           reserveExempt:sundayData.memberDetails?.[target.id]?.reserveExempt === true,
           reserveExemptionReason:sundayData.memberDetails?.[target.id]?.reserveExemptionReason ?? '',
-          roles:roles.filter(canManage).map(role => ({ id:role.id, name:role.name, held:target.roles.cache.has(role.id),
+          recordedOperations:recordedOperations(),
+          historicalOperations:sundayData.memberDetails?.[target.id]?.historicalOperations??0,
+          probationComplete:Boolean(sundayData.probationAwards?.[target.id]?.complete),
+          fullMember:clubRole(target,SUNDAY_MEMBER_ROLE_ID),onProbation:clubRole(target,PROBATIONARY_ROLE_ID),
+          roles:[...roles.values()].filter(canManage).map(role => ({ id:role.id, name:role.name, held:target.roles.cache.has(role.id),
             qualification:qualifications.has(role.id), manageable:target.manageable })),
         }]);
       }

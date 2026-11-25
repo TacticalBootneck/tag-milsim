@@ -84,6 +84,7 @@ async function loadDashboard(fresh = false) {
     ...(data.myCard.billet?[row('Standing assignment',data.myCard.billet)]:[]),
     row('Progression', data.progression),
     row('Attended main ops', String(data.mainOps)),
+    ...(data.historicalOperations?[row('Credited from previous TAG records',String(data.historicalOperations))]:[]),
     row('Qualifications', data.qualifications.join(', ') || 'None recorded'),
     ...data.training.map(entry => row(entry.title, entry.result)),
     ...data.attendance.map(entry => row(entry.title, entry.status)),
@@ -629,7 +630,32 @@ async function loadMemberManagement(chooser, details) {
     rankSave.type = 'submit';
     rankForm.append(rankSave);
     rankForm.onsubmit = event => {event.preventDefault(); void save('member-rank',{member,rank:rank.value,attendanceRequired:required.checked,attendanceExempt:exempt.checked,reserveExempt:reserveExempt.checked,reserveExemptionReason:exemptionReason.value},rankSave);};
-    details.replaceChildren(rankForm);
+    const serviceForm = node('form','');
+    serviceForm.append(node('h3','Service record'));
+    if (Number.isSafeInteger(data.recordedOperations) && Number.isSafeInteger(data.historicalOperations)) {
+      const total = field(serviceForm,'Set number of operations attended',
+        input('number',String(data.recordedOperations+data.historicalOperations)));
+      total.required = true;
+      total.min = String(data.recordedOperations);
+      total.max = '100000';
+      total.step = '1';
+      serviceForm.append(node('p',data.recordedOperations+' recorded in TAG · '+data.historicalOperations+' credited from previous records. New attendance adds to this total.'));
+      serviceForm.append(row('Probation',data.probationComplete?'Complete':data.onProbation?'In progress':data.fullMember?'Full Member · completion not recorded':'No completion recorded'));
+      const complete = field(serviceForm,'Mark probation complete and sync Full Member role',input('checkbox'));
+      complete.disabled = data.probationComplete && data.fullMember && !data.onProbation;
+      const serviceSave = button('Save service record');
+      serviceSave.type = 'submit';
+      const serviceStatus = node('p','');
+      serviceStatus.setAttribute('role','status');
+      serviceForm.append(serviceSave,serviceStatus);
+      serviceForm.onsubmit = event => {
+        event.preventDefault();
+        if (chooser.value!==member) return;
+        void save('member-service',{member,totalOperations:total.valueAsNumber,previousHistorical:data.historicalOperations,previousRecorded:data.recordedOperations,
+          completeProbation:complete.checked},serviceSave,serviceStatus);
+      };
+    }
+    details.replaceChildren(rankForm,serviceForm);
     for (const qualification of [false,true]) {
       const list = node('div','');
       list.append(node('h3',qualification ? 'Qualifications' : 'Discord roles'));

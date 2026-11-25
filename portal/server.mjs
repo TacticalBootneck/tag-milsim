@@ -341,10 +341,10 @@ async function dashboardAction(request, response, member) {
   }
   let input;
   try { input = JSON.parse(raw); } catch { return reply(response, 400, 'Invalid request.'); }
-  if (!input || !['attendance','confirm-standing','leave','withdraw-leave','edit-leave','approve-leave','standing','event-standing','event-unassign','members','sunday','training','cancel-event','delete-event','archive-event','edit-event','member-admin','member-rank','member-role','roster-unit','roster-element','campaign-release','member-details'].includes(input.action)) return reply(response, 400, 'Invalid action.');
+  if (!input || !['attendance','confirm-standing','leave','withdraw-leave','edit-leave','approve-leave','standing','event-standing','event-unassign','members','sunday','training','cancel-event','delete-event','archive-event','edit-event','member-admin','member-rank','member-service','member-role','roster-unit','roster-element','campaign-release','member-details'].includes(input.action)) return reply(response, 400, 'Invalid action.');
   const access = accessFor(member);
   if ((!['confirm-standing','leave','withdraw-leave','edit-leave','member-details'].includes(input.action) && access === 'Member') ||
-      (['standing','event-standing','event-unassign','members','delete-event','archive-event','member-admin','member-rank','member-role','roster-unit','roster-element','campaign-release'].includes(input.action) && access !== 'Command') ||
+      (['standing','event-standing','event-unassign','members','delete-event','archive-event','member-admin','member-rank','member-service','member-role','roster-unit','roster-element','campaign-release'].includes(input.action) && access !== 'Command') ||
       (['leave','withdraw-leave','edit-leave'].includes(input.action) && input.values?.member != null && input.values.member !== member.user.id && access === 'Member') ||
       (input.action === 'member-details' && input.values?.member != null && input.values.member !== member.user.id && access !== 'Command')) {
     return reply(response, 403, 'Staff access required.');
@@ -450,10 +450,13 @@ async function memberData(member, view) {
   const t2 = results.find(item => stage(item) === 't2' && item.results[id].result === 'passed');
   const t1Passed = results.some(item => stage(item) === 't1' && item.results[id].result === 'passed');
   const probationStart = t2?.results[id].route === 'rangers' ? t2.results[id].recordedAt ?? 0 : 0;
-  const mainOps = events.filter(event => event.type === 'operation' && event.start >= probationStart
-    && event.attendance?.[id]?.status === 'attended').length;
+  const historicalOperations=rosterData.memberDetails?.[id]?.historicalOperations??0;
+  const attended=events.filter(event=>event.type==='operation' && !event.cancelledAt && event.start<=Date.now()
+    && event.attendance?.[id]?.status==='attended');
+  const mainOps=historicalOperations+attended.length;
+  const probationOps=attended.filter(event=>event.start>=probationStart).length;
   const progression = roles.has(FULL_MEMBER_ROLE_ID) ? 'Full Member'
-    : roles.has(PROBATIONARY_ROLE_ID) ? 'Ranger probation · ' + Math.min(mainOps,3) + '/3 main operations'
+    : roles.has(PROBATIONARY_ROLE_ID) ? 'Ranger probation · ' + Math.min(probationOps,3) + '/3 main operations'
     : t2?.results[id].route === 'pilot' ? 'Awaiting 160th SOAR handover'
     : t1Passed ? 'Ready to book T2'
     : roles.has(RECRUIT_ROLE_ID) ? 'Recruit · Ready to book T1' : 'TAG member';
@@ -622,7 +625,7 @@ async function memberData(member, view) {
   return {
     displayName:rankedName(currentName,names[id]?.rank), editName:baseDisplayName(currentName,names[id]?.rank), medals:directory[id]?.medals ?? 0, streak:directory[id]?.streak ?? 0,
     recordsDelayed: roster.unavailable || trainingResult.unavailable || profileResult.unavailable,
-    progression, mainOps, access, leave, staff, nextAction, decorations:decorations(id),
+    progression, mainOps, historicalOperations, access, leave, staff, nextAction, decorations:decorations(id),
     unitDashboard:Object.values(unitNavigation(member)).some(Boolean),
     myCard:toCard(id,{name:currentName,status:progression}),
     mySchedule:[...upcomingOperations,...upcomingTraining].filter(event=>['Attending','Awaiting confirmation','Booked','Waitlisted'].includes(event.status))

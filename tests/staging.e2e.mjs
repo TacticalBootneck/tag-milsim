@@ -117,6 +117,7 @@ const missedEvents=Object.fromEntries(Array.from({length:7},(_,index)=>{
   return [key,{start:wall-(6-index)*week-2*86400000,title:'Staging week '+index,type:index%2?'training':'operation',
     groups:['devgru-alpha'],seats:{'devgru-alpha:1':{memberId:uid.ordinary,status:'confirmed'}},attendance:{}}];
 }));
+missedEvents['closed-0'].attendance[uid.pilot]={status:'attended',markedAt:wall-week};
 const exemptFromRequired=Object.fromEntries(Object.keys(uid).filter(name=>name!=='ordinary').map(name=>[uid[name],{attendanceRequired:false}]));
 const baseRoster={layoutVersion:2,soarLayoutVersion:2,hqLayoutVersion:2,courses:{'machine gunner':{name:'Machine Gunner',roleId:rid.qualification}},
   rosterElements:groups,rosterUnits:{devgru:{label:'DEVGRU'}},events:{[futureId]:event,...missedEvents},memberDetails:exemptFromRequired,
@@ -212,6 +213,33 @@ try {
   assert.equal((await verify(await get(memberApi,ordinary))).nextAction.heading,'You’re all caught up');
   assert.match(await verify(await get('/members/',student)),/id="next-action-heading">My Next Action/);
   await verify(await get(memberApi),401);
+  const actionApi='/api/member/action';
+  const pilotMember=members.get(uid.pilot);
+  pilotMember.roles.cache.delete(rid.full);
+  pilotMember.roles.cache.set(rid.prob,safeRole(rid.prob));
+  const service={action:'member-service',values:{member:uid.pilot,totalOperations:20,
+    previousHistorical:0,previousRecorded:1,completeProbation:true}};
+  await verify(await post(trainer,service,actionApi),403);
+  await verify(await post(ordinary,service,actionApi),403);
+  await verify(await post(command,{...service,values:{...service.values,totalOperations:1.5}},actionApi),400);
+  await verify(await post(command,service,actionApi));
+  assert.ok(pilotMember.roles.cache.has(rid.full));
+  assert.ok(!pilotMember.roles.cache.has(rid.prob));
+  await verify(await post(command,service,actionApi),409);
+  const [serviceDetails]=await verify(await post(command,{action:'member-admin',values:{member:uid.pilot}},actionApi));
+  assert.equal(serviceDetails.historicalOperations,19);
+  assert.equal(serviceDetails.recordedOperations,1);
+  assert.equal(serviceDetails.probationComplete,true);
+  const pilotDashboard=await verify(await get(memberApi,await login('pilot')));
+  assert.equal(pilotDashboard.mainOps,20);
+  assert.equal(pilotDashboard.progression,'Full Member');
+  assert.equal(pilotDashboard.attendance.length,1);
+  // Editing the total replaces the historical credit.
+  await verify(await post(command,{...service,values:{...service.values,totalOperations:19,
+    previousHistorical:19,completeProbation:false}},actionApi));
+  const serviceRoster=JSON.parse(readFileSync(resolve(bot,'sunday-rosters.json'),'utf8'));
+  assert.equal(serviceRoster.memberDetails[uid.pilot].historicalOperations,18);
+  assert.ok(serviceRoster.probationAwards[uid.pilot].complete);
   const setting=await verify(await post(command,{action:'settings',roles:{gm:rid.gm,t1:rid.t1,t2:rid.t2,heavy:rid.heavy,seasoned:rid.seasoned},
     channel:privateChannel,policy:false}));
   assert.deepEqual(setting,{});
