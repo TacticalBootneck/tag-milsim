@@ -428,11 +428,21 @@ function trainingSchedule() {
   recruitGroup.append(el('legend','Discord role'));
   const recruits=field(recruitGroup,'Invite recruits by DM',{type:'checkbox'});
   recipients.append(recruitGroup);
+  const shortlistGroup=el('fieldset');
+  shortlistGroup.append(el('legend','Approved applicants'));
+  const shortlist=field(shortlistGroup,'Invite approved shortlist by DM',{type:'checkbox'});
+  const shortlistCount=el('p');
+  shortlistGroup.append(shortlistCount);
+  recipients.append(shortlistGroup);
+  shortlist.checked=query.get('from')==='shortlist';
   const sync=()=>{
+    const count=data.shortlists?.[training.value]??0;
+    shortlistGroup.hidden=shortlist.disabled=!count;
+    shortlistCount.textContent=count+' approved '+(count===1?'candidate':'candidates')+' waiting for qualification. Invites apply to this session only.';
     limit.disabled=['','squad','unit','t1','t2'].includes(training.value);
     recruitGroup.hidden=recruits.disabled=!['t1','t2'].includes(training.value);
   };
-  training.onchange=sync;
+  training.onchange=()=>{shortlist.checked=false;sync();};
   sync();
   const squads=el('fieldset');
   squads.append(el('legend','Squads'));
@@ -450,7 +460,7 @@ function trainingSchedule() {
   submit(editor,'Schedule and post to Discord',()=>({action:'schedule-training',id:event,training:training.value,title:title.value,
     day:date.value,time:time.value,places:places.valueAsNumber,instructors:cadre.valueAsNumber,limit:limit.disabled?0:limit.valueAsNumber,
     channel:channel.value,repeat:repeat.value,squads:squadChoices.filter(([,input])=>input.checked).map(([key])=>key),
-    people:memberChoices.filter(([, ,input])=>input.checked).map(([id])=>id),inviteRecruits:!recruits.disabled&&recruits.checked}),
+    people:memberChoices.filter(([, ,input])=>input.checked).map(([id])=>id),inviteRecruits:!recruits.disabled&&recruits.checked,inviteShortlist:!shortlist.disabled&&shortlist.checked}),
     'Training queued. The bot will post it and send the selected invitations.');
   const series=card(content,'Upcoming repeat schedules');
   if (!data.series.length) series.append(el('p','No recurring training is currently posted.'));
@@ -770,6 +780,15 @@ function applications() {
     if (locked.length) line(content,'Unlocks at Seasoned Member',locked.map(item=>item.name).join(', '));
   }
   if (view==='application-review' && data.access.command) content.append(link('Edit application forms',unitLink('application-forms')));
+  if (view==='application-review' && data.shortlists?.length) {
+    const list=card(content,'Approved shortlists');
+    for (const item of data.shortlists) {
+      const group=card(list,item.name+' · '+item.people.length+' approved',true);
+      group.append(el('p',item.people.join(', ')));
+      if (item.canSchedule) group.append(link('Schedule a session with this shortlist',
+        unitLink('training',{type:item.key,from:'shortlist'})));
+    }
+  }
   if (view==='application-review' && !data.applications?.length) content.append(el('p','No applications are available to review.'));
   for (const item of (data.applications??[]).toSorted((a,b)=>Number(b.status==='pending')-Number(a.status==='pending')||b.at-a.at)) {
     const box=card(content,item.qualificationName+' · '+item.status,true);

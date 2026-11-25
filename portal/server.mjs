@@ -62,6 +62,9 @@ function unitBack(params,access) {
   const view=params.get('view')??'orders';
   if (view==='orders' && params.get('from')==='schedule') return backButton('/members/#my-schedule','My schedule');
   if (view==='orders' && params.get('from')==='events') return backButton('/members/#events','Upcoming events');
+  if (view==='training' && params.get('from')==='shortlist' && (access.command||access.cadre)) {
+    return backButton('/members/unit/?view=application-review','Review applications');
+  }
   if (view==='training' && params.get('from')==='courses' && (access.command||access.cadre)) {
     return backButton('/members/unit/?view=courses','Courses &amp; assessment forms');
   }

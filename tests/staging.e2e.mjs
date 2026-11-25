@@ -262,6 +262,24 @@ try {
   await verify(await post(trainer,{...recurring,squads:['missing-squad']}),400);
   await verify(await post(trainer,{...recurring,inviteRecruits:true}),400);
   await verify(await post(trainer,recurring));
+  const approved=await login('pilot');
+  const withdrawn=await login('bravo');
+  await verify(await post(command,{action:'application-form',qualification:'machine gunner',open:true,questions:[]}));
+  const selectionForm=(await verify(await get(endpoint+'?view=applications',approved))).qualifications
+    .find(item=>item.key==='machine gunner').form;
+  const application={action:'application',qualification:'machine gunner',version:selectionForm.version,note:'Ready for selection'};
+  const firstApproval=await verify(await post(approved,application));
+  const secondApproval=await verify(await post(withdrawn,application));
+  for (const row of [firstApproval,secondApproval]) {
+    await verify(await post(trainer,{action:'review-application',id:row.id,status:'approved'}));
+  }
+  assert.equal((await verify(await get(endpoint+'?view=training',trainer))).shortlists['machine gunner'],2);
+  const shortlist=(await verify(await get(endpoint+'?view=application-review',trainer))).shortlists;
+  assert.deepEqual(shortlist.find(item=>item.key==='machine gunner').people,['bravo','pilot']);
+  const selection=randomUUID();
+  await verify(await post(trainer,{...recurring,id:selection,training:'machine gunner',title:'Selection shortlist session',
+    squads:[],people:[],inviteShortlist:true}));
+  await verify(await post(command,{action:'review-application',id:secondApproval.id,status:'pending'}));
   const basicSeries=randomUUID();
   await verify(await post(trainer,{...recurring,id:basicSeries,training:'t1',title:'Recruit DM Basic Training',
     squads:[],people:[uid.student],inviteRecruits:true}));
@@ -498,6 +516,9 @@ try {
   const squadInvites=()=>captures.dms.filter(item=>item.message.content?.includes('Training invitation · Squad 11 Practice'));
   assert.equal(readSessions()[squadSeries].trainingTrack,'squad');
   assert.deepEqual(squadInvites().map(item=>item.id).sort(),[uid.charlie,uid.student].sort());
+  const selectionInvites=()=>captures.dms.filter(item=>item.message.content?.includes('Training invitation · Selection shortlist session'));
+  assert.deepEqual(selectionInvites().map(item=>item.id),[uid.pilot]);
+  assert.ok(!members.get(uid.pilot).roles.cache.has(rid.qualification));
   const recruitInvites=()=>captures.dms.filter(item=>item.message.content?.includes('Training invitation · Recruit DM Basic Training'));
   assert.deepEqual(recruitInvites().map(item=>item.id).sort(),[uid.student,uid.pilot].sort());
   const actor=members.get(uid.alice);
@@ -524,6 +545,8 @@ try {
   assert.deepEqual(invites().map(item=>item.id).sort(),[uid.alice,uid.alice,uid.pilot,uid.pilot].sort());
   assert.equal(readSessions()[readSessions()[basicSeries].repeatNext].inviteRecruits,true);
   assert.deepEqual(recruitInvites().map(item=>item.id).sort(),[uid.student,uid.student,uid.pilot].sort());
+  assert.ok(readSessions()[selection].repeatNext);
+  assert.equal(selectionInvites().length,1);
   const nextSquad=readSessions()[squadSeries].repeatNext;
   assert.ok(nextSquad);
   assert.deepEqual(readSessions()[nextSquad].squadLeaderScope,['1-1']);

@@ -3896,7 +3896,7 @@ async function runUnitJob(guild,key) {
       const qual=settings?.qualifications[job.qualification];
       const stageRole=stage || (qual?.specialty??defaultSpecialties[job.qualification]);
       if (job.squadLeaderScope) {
-        unitCheck(job.trainingTrack==='squad'&&!job.inviteRecruits&&!job.people?.length&&
+        unitCheck(job.trainingTrack==='squad'&&!job.inviteRecruits&&!job.people?.length&&!job.shortlist?.length&&
           (job.squads??[]).every(key=>job.squadLeaderScope.includes(key))&&squadTrainingAllowed(actor,job.squadLeaderScope),
           403,'You can only schedule training and send invitations for the squad you lead.');
       } else {
@@ -3918,7 +3918,7 @@ async function runUnitJob(guild,key) {
       const session=sessions[job.event]??{
         type:job.title,stage,start,recruitSlots:job.places,cadreSlots:job.instructors,trainingTrack:job.trainingTrack??undefined,
         channelId,bookings:{},scheduleActor:job.actor,customPostingChannel:!!job.channel,priorityLimit,
-        invitedSquads:job.squads??[],invitedPeople:job.people??[],squadLeaderScope:job.squadLeaderScope,inviteRecruits:!!stage&&job.inviteRecruits===true,
+        invitedSquads:job.squads??[],invitedPeople:job.people??[],shortlist:job.shortlist??[],squadLeaderScope:job.squadLeaderScope,inviteRecruits:!!stage&&job.inviteRecruits===true,
         ...(!stage&&job.qualification?{unitQualification:job.qualification}: {}),
         ...(job.repeat&&job.repeat!=='none'?{repeat:job.repeat,repeatSeries:job.event,repeatDay:job.day,repeatTime:job.time,repeatAnchor:Number(job.day.slice(-2))}:{}),
       };
@@ -4090,6 +4090,15 @@ function inviteRecipients(session) {
   return [...new Set([...(session.invitedPeople??[]),...roster])];
 }
 
+function stillShortlisted(state,session,member) {
+  const key=session.unitQualification;
+  const role=state?.settings.qualifications[key]?.discordRole||sundayData.courses?.[key]?.roleId;
+  const adjustment=state?.adjustments?.[member.id]?.qualifications?.[key];
+  return !clubRole(member,role) && adjustment!=='grant' &&
+    (adjustment==='revoke'||!Object.values(state?.assessments??{}).some(item=>item.qualification===key&&item.member===member.id&&item.status==='passed')) &&
+    Object.values(state?.applications??{}).some(item=>item.qualification===key&&item.member===member.id&&item.status==='approved');
+}
+
 async function postScheduledTraining(id,session,channel) {
   saveSession(id,{...session,inviteRecipients:session.inviteRecipients??inviteRecipients(session)});
   const post=await channel.send({...sessionPost(id,session),
@@ -4189,7 +4198,7 @@ async function sendTrainingInvitations(now) {
         continue;
       }
     }
-    for (const memberId of new Set([...selected,...recruits])) {
+    for (const memberId of new Set([...selected,...recruits,...(session.shortlist??[])])) {
       const current=sessions[id];
       if (!current || current.start<=Date.now() || current.inviteStatus?.[memberId]) continue;
       if (remaining--<=0) return;
@@ -4199,7 +4208,8 @@ async function sendTrainingInvitations(now) {
         const member=await jobMember(guild,memberId,true);
         if (!member || member.pending || member.user.bot || coveredByLeave(current,memberId) ||
             (current.squadLeaderScope && !inviteRecipients(current).includes(memberId)) ||
-            (!selected.has(memberId) && !clubRole(member,RECRUIT_ROLE_ID))) status='skipped';
+            (!selected.has(memberId) && !(recruits.includes(memberId) && clubRole(member,RECRUIT_ROLE_ID)) &&
+             !(current.shortlist?.includes(memberId) && stillShortlisted(opsState(),current,member)))) status='skipped';
         else {
           const channel=await client.channels.fetch(trainingChannelId(current));
           const canView=channel?.permissionsFor?.(member)?.has('ViewChannel')!==false;

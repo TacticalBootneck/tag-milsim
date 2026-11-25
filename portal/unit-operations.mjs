@@ -149,6 +149,15 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
     return unique(['t1','t2',...Object.keys(defaultTitles),...Object.keys(ctx.qualifications),...Object.keys(state.settings.qualifications)])
       .map(key=>({key,...qualification(state,key,ctx)}));
   }
+  function approvedShortlist(state,ctx,key) {
+    const qual=qualification(state,key,ctx);
+    if (!qual || ['t1','t2'].includes(key)) return [];
+    return unique(Object.values(state.applications).filter(item=>item.qualification===key && item.status==='approved')
+      .map(item=>item.member)).filter(member=>{
+        const person=ctx.members[member];
+        return person && !awardList(state,member).includes(key) && !person.roleIds?.includes(qual.discordRole);
+      });
+  }
   function permissions(state,member,ctx) {
     const has=rid=>Boolean(rid && member.roles.includes(rid));
     const command=has(ctx.roles.command);
@@ -388,6 +397,14 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         ? (access.command||item.member!==self) && access.review(qualification(state,item.qualification,ctx)) : item.member===self)
         .map(item=>({...item,canReview:reviewing&&item.member!==self,
           name:ctx.members[item.member]?.name ?? 'Former member',qualificationName:qualification(state,item.qualification,ctx)?.name ?? item.qualification}));
+      if (reviewing) {
+        payload.shortlists=all.filter(qual=>access.review(qual)).flatMap(qual=>{
+          const ids=approvedShortlist(state,ctx,qual.key);
+          if (!ids.length) return [];
+          return [{key:qual.key,name:qual.name,canSchedule:access.command||access.cadre&&access.assign(qual),
+            people:ids.map(id=>ctx.members[id].name).sort((a,b)=>a.localeCompare(b))}];
+        });
+      }
     }
     if (view==='progress') {
       payload.operations=serviceOperations(state,ctx,self);
@@ -414,6 +431,10 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         ...all.filter(qual=>access.command||access.assign(qual)).map(({key,name})=>({key,name}))]:[])];
       payload.squads=(ctx.squads??[]).filter(item=>canStaff||ctx.ledSquads?.includes(item.key));
       payload.people=canStaff?Object.values(ctx.members).map(({id,name})=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)):[];
+      payload.shortlists=Object.fromEntries(payload.types.flatMap(({key})=>{
+        const count=approvedShortlist(state,ctx,key).length;
+        return count?[[key,count]]:[];
+      }));
       payload.series=events.filter(event=>event.kind==='course'&&event.repeat&&event.start>now()&&!event.repeatStopped&&
         (canStaff||ownsSquadSeries(event,self,access,ctx)))
         .map(event=>{
@@ -637,6 +658,12 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         const squads=unique(list(input.squads??[],50,'selected squads'));
         const people=unique(list(input.people??[],500,'selected members'));
         const inviteRecruits=input.inviteRecruits===true;
+        let shortlist=[];
+        if (input.inviteShortlist===true) {
+          check(canStaff&&!generic&&!['t1','t2'].includes(key),'Choose a specialist course to invite its approved shortlist.',403);
+          shortlist=approvedShortlist(state,ctx,key);
+          check(shortlist.length,'This course no longer has any approved candidates waiting for selection.',409);
+        }
         const ledSquads=ctx.ledSquads??[];
         if (squadOnly) {
           check(ledSquads.length && squads.every(key=>ledSquads.includes(key)) && !people.length && !inviteRecruits,
@@ -657,7 +684,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
           Number.isInteger(input.instructors)&&input.instructors>=0&&input.instructors<=99,'Choose valid attendee and cadre capacities.');
         state.limits['training:'+event]=extraSeatLimit(input.limit??(generic?0:1));
         enqueue('schedule:'+event,'schedule',{actor,event,title,qualification:generic?null:key,trainingTrack:generic?key:null,
-          day:eventDay,time:input.time,places:input.places,instructors:input.instructors,channel,repeat,squads,people,inviteRecruits,
+          day:eventDay,time:input.time,places:input.places,instructors:input.instructors,channel,repeat,squads,people,inviteRecruits,shortlist,
           ...(squadOnly?{squadLeaderScope:squads.length?squads:[ledSquads[0]]}:{})});
         return {id:event};
       }
@@ -1000,7 +1027,10 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         entry.history??=[];
         if (entry.status!=='pending') entry.history.push({status:entry.status,reviewer:entry.reviewer,reviewed:entry.reviewed,decision:entry.decision});
         Object.assign(entry,{status:input.status,reviewer:actor,reviewed:now(),decision:str(input.note,'Decision note',1200,false)});
-        notice(state,'application-result:'+entry.id+':'+entry.reviewed,'Your qualification application is now '+entry.status+'. Read the decision on the website. '+link('applications'),'member',entry.member);
+        const message=input.status==='approved'
+          ? 'Your course application was approved. You are eligible to book the course and may be invited to a selection or training session.'
+          : 'Your course application is now '+entry.status+'.';
+        notice(state,'application-result:'+entry.id+':'+entry.reviewed,message+' '+link('applications'),'member',entry.member);
         return {};
       }
       case 'limit': {
