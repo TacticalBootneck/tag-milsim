@@ -3815,7 +3815,7 @@ function specialistStageRole(member,event) {
 function canOpenSignoff(member) {
   const settings=opsState()?.settings;
   return clubRole(member,COMMAND_ROLE_ID)||clubRole(member,TRAINING_CADRE_ROLE_ID)||unitStageRole(member,'t1')||
-    unitStageRole(member,'t2')||Object.entries(settings?.roles??{}).some(([key,role])=>!['seasoned','gm'].includes(key)&&clubRole(member,role));
+    unitStageRole(member,'t2')||Object.entries(settings?.roles??{}).some(([key,role])=>!['seasoned','veteran','gm'].includes(key)&&clubRole(member,role));
 }
 function standardBookings(session,kind) {
   return Object.entries(session.bookings??{}).filter(([id,role])=>role===kind && (kind!=='recruit'||!session.prioritySeats?.[id])).length;
@@ -3980,13 +3980,18 @@ async function runUnitJob(guild,key) {
     if (job.type==='role') {
       const state=opsState();
       const adjustment=state?.adjustments?.[job.member];
-      if ((job.source==='seasoned'?adjustment?.seasoned:adjustment?.qualifications[job.qualification])==='revoke') return 'Revoked by Command.';
-      const configured=job.source==='seasoned'?state?.settings.roles.seasoned
+      if ((job.source==='seasoned'?adjustment?.seasoned:job.source==='qualification'?adjustment?.qualifications[job.qualification]:null)==='revoke') return 'Revoked by Command.';
+      const configured=['seasoned','veteran'].includes(job.source)?state?.settings.roles[job.source]
         : state?.settings.qualifications[job.qualification]?.discordRole || sundayData.courses?.[job.qualification]?.roleId;
       unitCheck(configured===job.role,409,'The configured role has changed since this award was queued.');
       unitCheck(job.source!=='qualification'||!Object.values(state.settings.roles).includes(job.role),409,'Qualification roles must be separate from cadre roles.');
       const [target,role]=await Promise.all([jobMember(guild,job.member),guild.roles.fetch(job.role)]);
       unitCheck(qualificationAssignable(role,guild),403,'The configured award role is protected or above the bot.');
+      if (['seasoned','veteran'].includes(job.source) &&
+          (!clubRole(target,SUNDAY_MEMBER_ROLE_ID) || clubRole(target,PROBATIONARY_ROLE_ID) ||
+           clubRole(target,RECRUIT_ROLE_ID) || clubRole(target,RESERVE_ROLE_ID))) {
+        throw new UnitJobError(503,'Waiting for the member’s Full Member role.');
+      }
       if (!target.roles.cache.has(role.id)) await target.roles.add(role,'TAG website award');
       return 'Role synchronised.';
     }

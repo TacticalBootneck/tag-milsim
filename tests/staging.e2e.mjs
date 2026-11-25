@@ -52,7 +52,7 @@ export class Client extends EventEmitter {
 `);
 const snow=n=>String(123456789000000000n+BigInt(n));
 const rid={command:snow(1),cadre:snow(2),team:snow(3),squad:snow(4),gm:snow(5),t1:snow(6),t2:snow(7),heavy:snow(8),
-  full:snow(9),prob:snow(10),recruit:snow(11),reserve:snow(12),seasoned:snow(13),qualification:snow(14)};
+  full:snow(9),prob:snow(10),recruit:snow(11),reserve:snow(12),seasoned:snow(13),veteran:snow(15),qualification:snow(14)};
 const uid={command:snow(101),alice:snow(102),bravo:snow(103),charlie:snow(104),pilot:snow(105),gm:snow(106),ordinary:snow(107),trainer:snow(108),student:snow(109)};
 const everyone=snow(201), trainingChannel=snow(202), specialistChannel=snow(203), ordersChannel=snow(204), privateChannel=snow(205);
 const rolesByUser={command:[rid.command,rid.full],alice:[rid.team,rid.full],bravo:[rid.team,rid.full],
@@ -235,12 +235,12 @@ try {
   assert.equal(pilotDashboard.progression,'Full Member');
   assert.equal(pilotDashboard.attendance.length,1);
   // Editing the total replaces the historical credit.
-  await verify(await post(command,{...service,values:{...service.values,totalOperations:19,
+  await verify(await post(command,{...service,values:{...service.values,totalOperations:30,
     previousHistorical:19,completeProbation:false}},actionApi));
   const serviceRoster=JSON.parse(readFileSync(resolve(bot,'sunday-rosters.json'),'utf8'));
-  assert.equal(serviceRoster.memberDetails[uid.pilot].historicalOperations,18);
+  assert.equal(serviceRoster.memberDetails[uid.pilot].historicalOperations,29);
   assert.ok(serviceRoster.probationAwards[uid.pilot].complete);
-  const setting=await verify(await post(command,{action:'settings',roles:{gm:rid.gm,t1:rid.t1,t2:rid.t2,heavy:rid.heavy,seasoned:rid.seasoned},
+  const setting=await verify(await post(command,{action:'settings',roles:{gm:rid.gm,t1:rid.t1,t2:rid.t2,heavy:rid.heavy,seasoned:rid.seasoned,veteran:rid.veteran},
     channel:privateChannel,policy:false}));
   assert.deepEqual(setting,{});
   await verify(await post(command,{action:'bulk-results',event:'training:t1done',rows:[{member:uid.student,status:'passed'}]}),403);
@@ -434,6 +434,9 @@ try {
   assert.equal((await verify(await get(endpoint+'?view=gm',ordinary))).events,undefined);
   await verify(await post(command,{action:'member-adjustment',member:uid.ordinary,kind:'seasoned',mode:'grant',reason:'Verified operations'}));
   await deliveries();
+  assert.ok(pilotMember.roles.cache.has(rid.seasoned));
+  assert.ok(pilotMember.roles.cache.has(rid.veteran));
+
   assert.equal(captures.dms.filter(item=>item.id===uid.command&&item.message.content?.includes('&nomination='+nominationId)).length,1);
   const file=JSON.parse(readFileSync(resolve(bot,'basic-training-sessions.json'),'utf8'));
   assert.equal(file.t1done.results[uid.student].result,'passed');
@@ -452,7 +455,7 @@ try {
   const queue=new DatabaseSync(resolve(bot,'unit-operations.sqlite'),{readOnly:true});
   assert.deepEqual(queue.prepare("SELECT id,error FROM unit_jobs WHERE status='failed'").all(),[]);
   // Enable enforcement only against the fake Discord connection, confirm each week, and observe the real bridge.
-  await verify(await post(command,{action:'settings',roles:{gm:rid.gm,t1:rid.t1,t2:rid.t2,heavy:rid.heavy,seasoned:rid.seasoned},
+  await verify(await post(command,{action:'settings',roles:{gm:rid.gm,t1:rid.t1,t2:rid.t2,heavy:rid.heavy,seasoned:rid.seasoned,veteran:rid.veteran},
     channel:privateChannel,policy:true}));
   for (let index=0;index<7;index++) {
     await verify(await post(command,{action:'register',event:'sunday:closed-'+index,version:0,counts:true,confirm:true,

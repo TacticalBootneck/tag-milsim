@@ -36,7 +36,7 @@ test('Campaign eligibility is strictly above 80% and service tiers require ten o
 const at = Date.parse('2026-11-23T20:00:00Z');
 const snow = number => String(100000000000000000n+BigInt(number));
 const roles = {
-  command:snow(1), cadre:snow(2), team:snow(3), squad:snow(4), gm:snow(5), seasoned:snow(6),
+  command:snow(1), cadre:snow(2), team:snow(3), squad:snow(4), gm:snow(5), seasoned:snow(6),veteran:snow(11),
   t1:snow(7), t2:snow(8), heavy:snow(9), tacp:snow(10),
 };
 const people = {command:snow(20),candidate:snow(21),candidate2:snow(33),other:snow(22),staff:snow(23),heavy:snow(24),cadre1:snow(25),
@@ -298,14 +298,15 @@ test('Seasoned counts only eligible main operations and reward progress resets o
   f.add(event('unrelated','training',at-DAY,{marks:{[people.other]:'attended'}}));
   f.add(event('before-probation','operation',at-120*DAY,{marks:{[people.other]:'attended'}}));
   await f.settings();
-  assert.equal((await f.get('other','applications')).operations,9);
-  assert.equal((await f.get('other','applications')).seasoned,false);
-  const final=f.add(event('tenth','operation',at+10_000,{marks:{[people.other]:'attended'}}));
+  assert.equal((await f.get('other','applications')).operations,10);
+  assert.equal((await f.get('other','applications')).seasoned,true);
+  const final=f.add(event('next-op','operation',at+10_000));
   f.move(at+15_000);
-  assert.equal((await f.get('other','applications')).operations,9);
+  assert.equal((await f.get('other','applications')).operations,10);
   await f.post('staff',{action:'register',event:final.key,version:0,confirm:true,counts:true,marks:{
     [people.candidate]:'not-required',[people.candidate2]:'not-required',[people.other]:'attended'}});
   assert.equal((await f.get('other','applications')).seasoned,true);
+  assert.equal((await f.get('other','progress')).operations,11);
   assert.equal((await f.get('other','progress')).rewards.available,false);
   for(let n=0;n<4;n++) await f.app.deliver();
   assert.ok(f.deliveries.some(job=>job.type==='role'&&job.source==='seasoned'&&job.member===people.other));
@@ -329,4 +330,28 @@ test('the same warning and removal thresholds hold for any placement of two LOA 
       if (available[misses]) available[misses].marks.id='absent';
     }
   }
+});
+
+
+test('Historical operations earn Seasoned and Veteran at their exact thresholds',async t=>{
+  const f=fixture(); t.after(f.close);
+  await f.settings();
+  const person=f.context.members[people.other];
+  person.probationAt=0;
+  person.historicalOperations=9;
+  assert.equal((await f.get('other','progress')).seasoned,false);
+  person.historicalOperations=10;
+  assert.equal((await f.get('other','applications')).seasoned,true);
+  assert.equal((await f.get('other','progress')).veteran,false);
+  person.historicalOperations=29;
+  assert.equal((await f.get('other','progress')).veteran,false);
+  person.historicalOperations=30;
+  f.context.members[people.candidate].historicalOperations=30;
+  f.context.members[people.candidate].status='Probationary';
+  assert.equal((await f.get('candidate','progress')).veteran,false);
+  assert.equal((await f.get('other','progress')).veteran,true);
+  for(let n=0;n<4;n++) await f.app.deliver();
+  assert.deepEqual(f.deliveries.filter(job=>job.type==='role').map(job=>[job.member,job.role]).sort(),[
+    [people.other,roles.seasoned],[people.other,roles.veteran],
+  ].sort());
 });

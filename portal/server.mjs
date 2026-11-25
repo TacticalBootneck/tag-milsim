@@ -898,6 +898,7 @@ async function unitContext(member) {
       status:recordedStatus??(id===mId?personStatus:null)??directory[id]?.status??part.role??'Member',
       roleIds,
       joined:joined??0,activeSince:part.activeSince||0,probationAt:award?.complete?award.at:0,
+      historicalOperations:details[id]?.historicalOperations??0,
       exempt:details[id]?.attendanceExempt===true,required:details[id]?.attendanceRequired!==false};
   }
   const units={tag:'TAG',devgru:'DEVGRU',rrc:'RRC',soar:'160th SOAR'};

@@ -116,31 +116,21 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
     const training=Math.max(0,t2.size+(manual-used)*5);
     return {operations,training,claims,available:operations>=5&&training>=5};
   }
-  function seasonedSince(ctx,member) {
-    const start=ctx.members[member]?.probationAt;
-    const earliestJoin=ctx.members[member]?.joined ?? 0;
-    return start && start>=earliestJoin ? start : 0;
-  }
-  function seasoned(state,ctx,member) {
-    const after=seasonedSince(ctx,member);
-    if (!after) return 0;
-    const attended=new Set();
+  function serviceOperations(state,ctx,member) {
+    let attended=ctx.members[member]?.historicalOperations??0;
     for (const event of Object.values(ctx.events)) {
-      if (event.kind!=='operation' || event.start<=after || event.start>now() || event.cancelled) continue;
+      if (event.kind!=='operation' || event.start>now() || event.cancelled) continue;
       const official=state.registers[event.key];
-      if ((official?.closedAt ? official.marks[member] : event.start<=(state.settings.legacyThrough??0)?event.marks[member]:null)==='attended') attended.add(event.key);
+      if ((official?.closedAt ? official.marks[member] : event.marks[member])==='attended') attended++;
     }
-    for (const row of Object.values(state.registers)) {
-      if (row.closedAt && row.start>after && row.kind==='operation' && row.marks[member]==='attended') attended.add(row.key);
-    }
-    return attended.size;
+    return attended;
   }
   function seasonedEligible(state,ctx,member,discordRoles=[]) {
     const forced=state.adjustments?.[member]?.seasoned;
     if (forced==='grant') return true;
     if (forced==='revoke') return false;
     return Boolean(state.settings.roles.seasoned&&discordRoles.includes(state.settings.roles.seasoned)) ||
-      ctx.members[member]?.status==='Full Member'&&seasoned(state,ctx,member)>=10;
+      ctx.members[member]?.status==='Full Member'&&serviceOperations(state,ctx,member)>=10;
   }
   function awardList(state,member) {
     const adjustments=state.adjustments?.[member]?.qualifications??{};
@@ -254,11 +244,16 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
   function progression(state,ctx) {
     for (const [member,person] of Object.entries(ctx.members)) {
       if (person.status!=='Full Member') continue;
-      const started=seasonedSince(ctx,member);
-      if (started && seasoned(state,ctx,member)>=10 && state.adjustments?.[member]?.seasoned!=='revoke') {
-        if (state.settings.roles.seasoned) enqueue('seasoned-role:'+member+':'+started+':'+state.settings.roles.seasoned,
+      const operations=serviceOperations(state,ctx,member);
+      const serviceKey=person.probationAt>=person.joined&&person.probationAt || person.joined || 0;
+      if (operations>=10 && state.adjustments?.[member]?.seasoned!=='revoke') {
+        if (state.settings.roles.seasoned) enqueue('seasoned-role:'+member+':'+serviceKey+':'+state.settings.roles.seasoned,
           'role',{member,role:state.settings.roles.seasoned,source:'seasoned'});
-        notice(state,'seasoned:'+member+':'+started,'You earned Seasoned Member and can now apply for eligible qualifications. '+link('applications'),'member',member);
+        notice(state,'seasoned:'+member+':'+serviceKey,'You earned Seasoned Member and can now apply for eligible qualifications. '+link('applications'),'member',member);
+      }
+      if (operations>=30 && state.settings.roles.veteran) {
+        enqueue('veteran-role:'+member+':'+serviceKey+':'+state.settings.roles.veteran,
+          'role',{member,role:state.settings.roles.veteran,source:'veteran'});
       }
       if (charges(state,ctx,member).available) {
         const progress=charges(state,ctx,member);
@@ -377,7 +372,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
     }
     if (view==='applications' || view==='application-review' && navigation.reviews) {
       const reviewing=view==='application-review';
-      const ops=seasoned(state,ctx,self);
+      const ops=serviceOperations(state,ctx,self);
       payload.seasoned=seasonedEligible(state,ctx,self,member.roles);
       payload.operations=ops;
       payload.qualifications=all.filter(item=>item.applications).map(({key,name,seasoned})=>({key,name,seasoned}));
@@ -387,8 +382,10 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
           name:ctx.members[item.member]?.name ?? 'Former member',qualificationName:qualification(state,item.qualification,ctx)?.name ?? item.qualification}));
     }
     if (view==='progress') {
-      payload.operations=seasoned(state,ctx,self);
+      payload.operations=serviceOperations(state,ctx,self);
       payload.seasoned=seasonedEligible(state,ctx,self,member.roles);
+      payload.veteran=Boolean(state.settings.roles.veteran&&member.roles.includes(state.settings.roles.veteran)) ||
+        ctx.members[self]?.status==='Full Member'&&payload.operations>=30;
       payload.rewards=charges(state,ctx,self);
       payload.qualifications=awardList(state,self).map(key=>qualification(state,key,ctx)?.name??key);
       payload.attendance=attendanceProgress(Object.values(state.registers).filter(row=>row.closedAt),self,now(),ctx.members[self]?.activeSince||ctx.members[self]?.joined||0);
@@ -544,11 +541,13 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
       case 'settings': {
         check(access.command,'Command access required.',403);
         const roles={};
-        for (const key of ['t1','t2','seasoned','gm',...Object.keys(specialties)]) roles[key]=role(input.roles?.[key]??'');
+        for (const key of ['t1','t2','seasoned','veteran','gm',...Object.keys(specialties)]) roles[key]=role(input.roles?.[key]??(key==='veteran'?state.settings.roles.veteran??'':''));
         check(!roles.t1 || !roles.t2 || roles.t1!==roles.t2,'Configure separate T1 and T2 roles.');
         check(!Object.values(roles).some(value=>value&&[ctx.roles.command,ctx.roles.cadre,ctx.guild].includes(value)),'Use distinct Discord roles for specialist cadre and Seasoned Member.');
         check(!roles.seasoned || !Object.entries(roles).some(([key,value])=>key!=='seasoned'&&value===roles.seasoned),
           'Seasoned Member must have a separate role.');
+        check(!roles.veteran || !Object.entries(roles).some(([key,value])=>key!=='veteran'&&value===roles.veteran),
+          'Veteran Member must have a separate role.');
         check(!roles.gm || !Object.entries(roles).some(([key,value])=>key!=='gm'&&value===roles.gm),'Game Master must have a separate role.');
         check(!input.policy || input.channel,'Set a private Command channel before enabling enforcement.');
         const previousChannel=state.settings.channel;
@@ -945,7 +944,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         const qual=qualification(state,qualificationKey,ctx);
         check(qual?.applications,'Applications are closed for this qualification.',403);
         check(!qual.seasoned || seasonedEligible(state,ctx,actor,member.roles),
-          'Finish ten operations after probation before applying.',403);
+          'Seasoned Member is required. Full Members qualify at ten attended operations.',403);
         check(!Object.values(state.applications).some(item=>item.member===actor&&item.qualification===qualificationKey&&
           ['pending','approved'].includes(item.status)), 'An application is already open or approved.',409);
         const entry={id:randomUUID(),member:actor,qualification:qualificationKey,status:'pending',
@@ -1178,6 +1177,20 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
             const channel=read().settings.channel;
             if (!channel) throw new WorkflowError('CHANNEL_REQUIRED',422);
             payload.channel=channel;
+          }
+          if (payload.type==='role' && ['seasoned','veteran'].includes(payload.source)) {
+            const ctx=await context(null);
+            const state=read();
+            const minimum=payload.source==='seasoned'?10:30;
+            if (state.settings.roles[payload.source]!==payload.role) {
+              storage().prepare("UPDATE unit_jobs SET status='superseded',error=NULL WHERE id=?").run(row.id);
+              continue;
+            }
+            if (!ctx.available || ctx.members[payload.member]?.status!=='Full Member' ||
+                serviceOperations(state,ctx,payload.member)<minimum) {
+              storage().prepare('UPDATE unit_jobs SET next=?,error=? WHERE id=?').run(now()+120_000,'Waiting for service milestone eligibility',row.id);
+              continue;
+            }
           }
           if (['policy','attendance','priority','priority-cancel'].includes(payload.type)) {
             const state=read();

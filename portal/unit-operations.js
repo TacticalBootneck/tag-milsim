@@ -16,7 +16,7 @@ const views={orders:'Orders & readiness',taskings:'Taskings',applications:'Apply
   honours:'Recommend someone for an honour','honours-review':'Review honours','application-review':'Review applications'};
 const specialties={t1:'Basic Training Cadre T1',t2:'Basic Training Cadre T2',heavy:'Heavy Weapons Training Cadre',tacp:'TACP Training Cadre',
   dog:'Dog Handler Training Cadre',sniper:'Sniper Training Cadre',pilot:'Pilot Training Cadre',medical:'Medical Training Cadre',
-  leadership:'Leadership Training Cadre',devgru:'DEVGRU Training Cadre',rrc:'RRC Training Cadre',seasoned:'Seasoned Member',gm:'Game Master'};
+  leadership:'Leadership Training Cadre',devgru:'DEVGRU Training Cadre',rrc:'RRC Training Cadre',seasoned:'Seasoned Member',veteran:'Veteran Member',gm:'Game Master'};
 const pairs=object=>Object.entries(object);
 const when=time=>new Intl.DateTimeFormat(...uk).format(time);
 const eventText=event=>event.title+' · '+when(event.start)+' UK';
@@ -709,7 +709,7 @@ function bulkResults(parent,event) {
 function applications() {
   if (view==='applications') {
     heading(content,'Apply for a qualification');
-    line(content,'Seasoned Member',data.seasoned?'Earned':Math.min(10,data.operations??0)+' of 10 operations after probation');
+    line(content,'Seasoned Member',data.seasoned?'Earned':Math.min(10,data.operations??0)+' of 10 attended operations');
     const available=(data.qualifications??[]).filter(row=>!row.seasoned||data.seasoned);
     if (available.length) {
       const editor=form(card(content,'New application'));
@@ -785,8 +785,9 @@ function progress() {
       'Reserve request sent to Command.');
   }
   if (data.reserveRequest) line(window,'Reserve request',data.reserveRequest.status);
-  const progression=card(content,'Post-probation progress');
-  line(progression,'Seasoned Member',data.seasoned?'Earned':data.operations+' / 10 confirmed operations');
+  const progression=card(content,'Service milestones');
+  line(progression,'Seasoned Member',data.seasoned?'Earned':data.operations+' / 10 attended operations');
+  line(progression,'Veteran Member',data.veteran?'Earned':data.operations+' / 30 attended operations');
   if (data.qualifications.length) line(progression,'Qualifications earned',data.qualifications.join(', '));
 }
 function command() {
@@ -893,7 +894,7 @@ function configuration() {
     const key=field(fieldset,'Qualification key',{value:current?.key,required:true,limit:80});
     key.disabled=!!current;
     const name=field(fieldset,'Qualification name',{value:current?.name,required:true,limit:100});
-    const specialty=field(fieldset,'Assessor specialty',{choices:[['','Choose specialty'],...pairs(specialties).filter(([key])=>key!=='seasoned')],
+    const specialty=field(fieldset,'Assessor specialty',{choices:[['','Choose specialty'],...pairs(specialties).filter(([key])=>!['seasoned','veteran'].includes(key))],
       value:current?.specialty,required:true});
     const discord=field(fieldset,'Discord award role ID (optional)',{value:current?.discordRole,limit:20});
     const reviewer=field(fieldset,'Application reviewer role ID (optional)',{value:current?.reviewer,limit:20});
