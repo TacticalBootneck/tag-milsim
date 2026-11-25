@@ -355,3 +355,32 @@ test('Historical operations earn Seasoned and Veteran at their exact thresholds'
     [people.other,roles.seasoned],[people.other,roles.veteran],
   ].sort());
 });
+
+
+test('Command opens new course applications with questions and reviewers see the submitted answers',async t=>{
+  const f=fixture(); t.after(f.close);
+  await f.settings();
+  const form={action:'application-form',qualification:'machine gunner',open:true,seasoned:false,
+    reviewer:roles.tacp,intro:'Describe your Reforger experience.',questions:['What is your prior experience?','Which session works for you?']};
+  assert.ok(!(await f.get('other','applications')).qualifications.some(item=>item.key===form.qualification));
+  await f.post('staff',form,403);
+  await f.post('command',form);
+  const available=(await f.get('other','applications')).qualifications.find(item=>item.key===form.qualification);
+  assert.equal(available.form.intro,form.intro);
+  assert.deepEqual(available.form.questions,form.questions);
+  const submit={action:'application',qualification:form.qualification,version:available.form.version,answers:['Three events','Wednesday']};
+  await f.post('other',{...submit,answers:['Only one answer']},400);
+  const {id}=await f.post('other',submit);
+  await f.post('other',submit,409);
+  const own=await f.post('command',submit);
+  const inbox=(await f.get('command','application-review')).applications;
+  assert.equal(inbox.find(item=>item.id===own.id).canReview,false);
+  await f.post('command',{action:'review-application',id:own.id,status:'approved'},403);
+  assert.equal((await f.get('staff','application-review')).applications.length,0);
+  const review=(await f.get('tacp','application-review')).applications.find(item=>item.id===id);
+  assert.deepEqual(review.responses,form.questions.map((question,index)=>({question,answer:submit.answers[index]})));
+  await f.post('tacp',{action:'review-application',id,status:'approved',note:'Accepted'});
+  await f.post('command',{...form,version:available.form.version,open:false,questions:['Updated prompt']});
+  assert.ok(!(await f.get('other','applications')).qualifications.some(item=>item.key===form.qualification));
+  assert.deepEqual((await f.get('other','applications')).applications[0].responses,review.responses);
+});

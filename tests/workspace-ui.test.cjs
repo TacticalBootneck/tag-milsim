@@ -80,7 +80,7 @@ const course={id:'course',name:'Game course',qualification:'jtac',formTitle:'Ass
   version:1,canAssess:true,criteria:[{title:'Criterion one',description:'Description'}]};
 const register={version:1,counts:true,rows:[{member:id,name:'Fixture member',candidate:true,mark:''},
   {member:'other',name:'Second member',candidate:true,mark:'loa'}]};
-const allViews=['orders','taskings','applications','application-review','progress','courses','records','training','attendance','gm','command'];
+const allViews=['orders','taskings','applications','application-review','application-forms','progress','courses','records','training','attendance','gm','command'];
 const basics={access:can,views:allViews,member:id};
 const loadView=(view,fixture)=>load('unit-operations.js',input=>input?{id:'saved',recorded:1,skipped:0}:{...basics,...fixture},{query:'?view='+view});
 
@@ -252,4 +252,26 @@ test('Squad Leader training defaults to Squad training and only shows their squa
   await submit(requireButton(training.root,'Schedule and post to Discord'));
   assert.deepEqual(training.submitted[0].squads,['1-1']);
   assert.deepEqual(training.submitted[0].people,[]);
+});
+
+
+test('Application form editor opens a course and members answer its questions',async()=>{
+  const forms=loadView('application-forms',{qualifications:[{key:'machine gunner',name:'Machine Gunner'}]});
+  await tick();
+  label(forms.root,'Accept applications').checked=true;
+  label(forms.root,'Questions (one per line)').value='Experience?\nAvailability?';
+  await submit(requireButton(forms.root,'Save application form'));
+  assert.equal(forms.submitted[0].open,true);
+  assert.deepEqual(forms.submitted[0].questions,['Experience?','Availability?']);
+
+  const apply=loadView('applications',{seasoned:false,qualifications:[{key:'machine gunner',name:'Machine Gunner',seasoned:false,
+    form:{version:'fixture-version',intro:'Tell us about yourself',questions:['Experience?','Availability?']}}],applications:[]});
+  await tick();
+  label(apply.root,'Qualification').value='machine gunner';
+  label(apply.root,'Qualification').onchange();
+  label(apply.root,'Experience?').value='Several events';
+  label(apply.root,'Availability?').value='Wednesday';
+  await submit(requireButton(apply.root,'Submit application'));
+  assert.equal(apply.submitted[0].version,'fixture-version');
+  assert.deepEqual(apply.submitted[0].answers,['Several events','Wednesday']);
 });

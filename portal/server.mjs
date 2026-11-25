@@ -68,7 +68,7 @@ function unitBack(params,access) {
   if ((['command','honours-review'].includes(view) || view==='honours' && params.has('nomination')) && access.administration) {
     return backButton('/staff/administration/','Administration');
   }
-  if (['training','courses','records','attendance','application-review'].includes(view) && access.training) {
+  if (['training','courses','records','attendance','application-review','application-forms'].includes(view) && access.training) {
     return backButton('/staff/training/','Training');
   }
   if (['orders','taskings','gm'].includes(view) && access.operations) return backButton('/staff/operations/','Operations');
@@ -293,6 +293,7 @@ function staffLanding(response,path,access) {
     ]:[]),
     ...(access.administrative?[['Schedule Sunday platoon training',tools('platoon','training'),'Choose a date, time and participating groups.']]:[]),
     ...(access.leader||access.cadre?[['Candidate records',unit('records'),'Review available assessments.']]:[]),
+    ...(access.command?[['Application forms',unit('application-forms'),'Open applications and set questions for each qualification or course.']]:[]),
     ...(access.reviews?[['Review applications',unit('application-review'),'Decide applications for qualifications you oversee.']]:[]),
   ];
   const operations=[

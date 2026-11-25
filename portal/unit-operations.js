@@ -13,7 +13,7 @@ const marks={
 const outcomes={passed:'Passed',retest:'Needs retest',failed:'Failed',repeat:'Needs retest',absent:'Absent',draft:'Draft'};
 const views={orders:'Orders & readiness',taskings:'Taskings',applications:'Apply for a qualification',progress:'My attendance & rewards',
   courses:'Courses',training:'Schedule training',records:'Candidate records',attendance:'Attendance & sign-off',gm:'Game Master briefs',command:'Command inbox',
-  honours:'Recommend someone for an honour','honours-review':'Review honours','application-review':'Review applications'};
+  honours:'Recommend someone for an honour','honours-review':'Review honours','application-review':'Review applications','application-forms':'Application forms'};
 const specialties={t1:'Basic Training Cadre T1',t2:'Basic Training Cadre T2',heavy:'Heavy Weapons Training Cadre',tacp:'TACP Training Cadre',
   dog:'Dog Handler Training Cadre',sniper:'Sniper Training Cadre',pilot:'Pilot Training Cadre',medical:'Medical Training Cadre',
   leadership:'Leadership Training Cadre',devgru:'DEVGRU Training Cadre',rrc:'RRC Training Cadre',seasoned:'Seasoned Member',veteran:'Veteran Member',gm:'Game Master'};
@@ -25,6 +25,7 @@ let saving=false;
 let openAssessment;
 let recordFilter='';
 let activeEvent=query.get('event')||'';
+let editingApplicationForm=query.get('qualification')||'';
 
 function el(tag,text='',klass='') {
   const node=document.createElement(tag);
@@ -527,6 +528,9 @@ function candidateRecords() {
           render();
         })]:[]));
       editCourse(box,course);
+      if (data.access.command&&!['t1','t2'].includes(course.qualification)) {
+        box.append(link('Configure applications',unitLink('application-forms',{qualification:course.qualification})));
+      }
       if (!course.archivedAt) box.append(link('Schedule a session',unitLink('training',{type:course.qualification,title:course.name,from:'courses'})));
       box.append(button(course.archivedAt?'Restore course':'Archive course',()=>save(()=>confirm('Change this course’s archive status?')?
         {action:'course-archive',course:course.id,restore:!!course.archivedAt}:null)));
@@ -706,6 +710,37 @@ function bulkResults(parent,event) {
   },result=>result.recorded+' recorded or queued · '+result.skipped+' already recorded.');
 }
 
+function applicationForms() {
+  if (!data.qualifications.length) {
+    content.append(el('p','Create a qualification in Command settings before opening applications.'));
+    return;
+  }
+  const editor=form(card(content,'Configure course applications'));
+  const choices=data.qualifications.map(item=>[item.key,item.name+(item.applications?' · Open':' · Closed')]);
+  const selected=field(editor,'Qualification or course',{choices,value:editingApplicationForm||choices[0][0]});
+  const settings=el('div','','uo-form');
+  editor.append(settings);
+  selected.onchange=()=>{
+    const item=data.qualifications.find(row=>row.key===selected.value)??data.qualifications[0];
+    editingApplicationForm=item.key;
+    selected.value=item.key;
+    settings.replaceChildren();
+    const open=field(settings,'Accept applications',{type:'checkbox',value:item.applications});
+    const seasoned=field(settings,'Require Seasoned Member',{type:'checkbox',value:item.seasoned});
+    const reviewer=field(settings,'Application reviewer Discord role ID (optional)',{value:item.reviewer,limit:20});
+    const intro=field(settings,'Instructions for applicants (optional)',{type:'textarea',value:item.form?.intro,limit:1200});
+    const questions=field(settings,'Questions (one per line)',{type:'textarea',value:item.form?.questions.join('\n'),limit:1288});
+    settings.append(el('p','Add up to eight required questions. Leave this blank to use the standard application statement.'));
+    submit(settings,'Save application form',()=>({action:'application-form',qualification:item.key,open:open.checked,
+      seasoned:seasoned.checked,reviewer:reviewer.value.trim(),intro:intro.value,
+      questions:questions.value.split('\n').map(line=>line.trim()).filter(Boolean),version:item.form?.version}),
+      'Application form saved.');
+    editor.onsubmit=settings.onsubmit;
+  };
+  selected.onchange();
+  content.append(link('Review applications',unitLink('application-review')),
+    link('Add a qualification',unitLink('command')+'#qualification-settings'));
+}
 function applications() {
   if (view==='applications') {
     heading(content,'Apply for a qualification');
@@ -714,18 +749,35 @@ function applications() {
     if (available.length) {
       const editor=form(card(content,'New application'));
       const qualification=field(editor,'Qualification',{choices:[['','Choose a qualification'],...available.map(row=>[row.key,row.name])],required:true});
-      const note=field(editor,'Why are you applying?',{type:'textarea',required:true,limit:1800});
-      submit(editor,'Submit application',()=>({action:'application',qualification:qualification.value,note:note.value}),
-        'Application submitted. Discord notification queued.');
+      const fields=el('div','','uo-form');
+      editor.append(fields);
+      let formVersion, answers, note;
+      qualification.onchange=()=>{
+        fields.replaceChildren();
+        const item=available.find(row=>row.key===qualification.value);
+        formVersion=item?.form?.version;
+        if (item?.form?.intro) fields.append(el('p',item.form.intro));
+        answers=(item?.form?.questions??[]).map(question=>field(fields,question,{type:'textarea',required:true,limit:1800}));
+        note=field(fields,answers.length?'Anything else? (optional)':'Why are you applying?',
+          {type:'textarea',required:!answers.length,limit:1800});
+      };
+      qualification.onchange();
+      submit(editor,'Submit application',()=>({action:'application',qualification:qualification.value,note:note.value,
+        version:formVersion,answers:answers.map(answer=>answer.value)}),
+        'Application submitted. Its status is listed below.');
     } else content.append(el('p','No qualifications are currently open to you.'));
     const locked=(data.qualifications??[]).filter(item=>item.seasoned&&!data.seasoned);
     if (locked.length) line(content,'Unlocks at Seasoned Member',locked.map(item=>item.name).join(', '));
   }
+  if (view==='application-review' && data.access.command) content.append(link('Edit application forms',unitLink('application-forms')));
   if (view==='application-review' && !data.applications?.length) content.append(el('p','No applications are available to review.'));
-  for (const item of (data.applications??[]).toSorted((a,b)=>b.at-a.at)) {
+  for (const item of (data.applications??[]).toSorted((a,b)=>Number(b.status==='pending')-Number(a.status==='pending')||b.at-a.at)) {
     const box=card(content,item.qualificationName+' · '+item.status,true);
     line(box,'Candidate',item.name);
+    box.open=query.get('application')===item.id || item.status==='pending';
+    for (const response of item.responses??[]) line(box,response.question,response.answer);
     line(box,'Application',item.note);
+    if (view==='application-review' && item.member===data.member) box.append(el('p','Another reviewer must decide your application.'));
     line(box,'Decision',item.decision);
     if (item.canReview && (item.status==='pending'||data.access.command)) {
       const editor=form(box);
@@ -881,6 +933,8 @@ function configuration() {
   submit(editor,'Save settings',()=>enabled.checked && !data.settings.policy && !confirm('Enable the rolling policy on confirmed registers? When the removal threshold is met, the TAG bot can remove a member.')
     ? null : {action:'settings',roles:Object.fromEntries(roles.map(([key,input])=>[key,input.value.trim()])),channel:channel.value.trim(),policy:enabled.checked});
   const qualifications=card(content,'Qualification access and reviewers',true);
+  qualifications.id='qualification-settings';
+  qualifications.open=location.hash==='#qualification-settings';
   const selectorForm=form(qualifications);
   const chosen=field(selectorForm,'Qualification',{choices:[['','Create qualification'],...data.qualifications.map(item=>[item.key,item.name])]});
   const body=el('div');
@@ -1064,7 +1118,7 @@ function render() {
     return;
   }
   const routes={orders,taskings,applications,progress,courses:candidateRecords,records:candidateRecords,training:trainingSchedule,attendance,gm,command,
-    honours:honoursView,'honours-review':honoursView,'application-review':applications};
+    honours:honoursView,'honours-review':honoursView,'application-review':applications,'application-forms':applicationForms};
   routes[view]();
 }
 async function load() {

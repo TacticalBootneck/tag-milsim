@@ -101,7 +101,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
   function notice(state,key,text,destination='staff',memberId,requiredRole) {
     enqueue('notice:'+key,'notify',{destination,memberId,requiredRole,channel:state.settings.channel,text:text.slice(0,1800)});
   }
-  const link = view => origin+'/members/unit/?view='+view;
+  const link = (view,extra={}) => origin+'/members/unit/?'+new URLSearchParams({view,...extra});
   function charges(state,ctx,member) {
     const events=Object.values(state.registers).filter(row=>row.closedAt);
     const join=ctx.members[member]?.joined ?? 0;
@@ -160,7 +160,8 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
     const assign=entry=>Boolean(entry && (['t1','t2'].includes(entry.specialty)
       ? has(instructors[entry.specialty])
       : entry.specialty && has(instructors[entry.specialty])));
-    return {command,leader,squadLeader,cadre,gameMaster,assign,review:entry=>command || has(entry?.reviewer) || assign(entry)};
+    return {command,leader,squadLeader,cadre,gameMaster,assign,review:entry=>command || has(entry?.reviewer) || assign(entry) ||
+      Boolean(entry && !entry.reviewer && !instructors[entry.specialty] && has(ctx.roles.cadre))};
   }
   function dashboardAccess(state,member,roles) {
     const {command,cadre,leader,squadLeader,gameMaster}=permissions(state,member,{roles});
@@ -301,7 +302,7 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
     const navigation=dashboardAccess(state,member,ctx.roles);
     const payload={access:navigation,
       views:[...new Set(['orders','taskings','applications','progress','honours',...(access.leader?['records']:[]),...(access.cadre?['courses','records']:access.command?['courses']:[]),
-        ...(canStaff||access.squadLeader?['training']:[]),...(canStaff?['attendance']:[]),...(access.command||access.gameMaster?['gm']:[]),...(access.command?['command']:[]),
+        ...(canStaff||access.squadLeader?['training']:[]),...(canStaff?['attendance']:[]),...(access.command||access.gameMaster?['gm']:[]),...(access.command?['command','application-forms']:[]),
         ...(navigation.reviews?['application-review']:[]),...(navigation.honours?['honours-review']:[])])],
       member:member.user.id};
     if (view==='honours' || view==='honours-review' && navigation.honours) {
@@ -370,15 +371,22 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
       payload.canAar=ctx.canAar;
       payload.canViewCampaign=Boolean(ctx.campaign);
     }
+    if (view==='application-forms' && access.command) {
+      payload.qualifications=all.filter(item=>!['t1','t2'].includes(item.key)).map(({key,name,applications,seasoned,reviewer})=>({
+        key,name,applications,seasoned,reviewer,form:state.settings.applicationForms?.[key],
+      })).sort((a,b)=>a.name.localeCompare(b.name));
+    }
     if (view==='applications' || view==='application-review' && navigation.reviews) {
       const reviewing=view==='application-review';
       const ops=serviceOperations(state,ctx,self);
       payload.seasoned=seasonedEligible(state,ctx,self,member.roles);
       payload.operations=ops;
-      payload.qualifications=all.filter(item=>item.applications).map(({key,name,seasoned})=>({key,name,seasoned}));
+      payload.qualifications=all.filter(item=>item.applications&&!['t1','t2'].includes(item.key))
+        .map(({key,name,seasoned})=>({key,name,seasoned,form:state.settings.applicationForms?.[key]}))
+        .sort((a,b)=>a.name.localeCompare(b.name));
       payload.applications=Object.values(state.applications).filter(item=>reviewing
-        ? item.member!==self && access.review(qualification(state,item.qualification,ctx)) : item.member===self)
-        .map(item=>({...item,canReview:reviewing,
+        ? (access.command||item.member!==self) && access.review(qualification(state,item.qualification,ctx)) : item.member===self)
+        .map(item=>({...item,canReview:reviewing&&item.member!==self,
           name:ctx.members[item.member]?.name ?? 'Former member',qualificationName:qualification(state,item.qualification,ctx)?.name ?? item.qualification}));
     }
     if (view==='progress') {
@@ -939,24 +947,50 @@ export function createUnitOperations({dataDir,origin,context,sendJob,getChannels
         } else throw new WorkflowError('Choose a tasking action.');
         return {};
       }
+      case 'application-form': {
+        check(access.command,'Command access required.',403);
+        const key=str(input.qualification,'Qualification',80);
+        check(!['t1','t2'].includes(key)&&qualification(state,key,ctx),'Choose a specialist qualification or course.');
+        const reviewer=role(input.reviewer??'');
+        check(reviewer!==ctx.guild,'Choose a reviewer role other than @everyone.');
+        const questions=list(input.questions??[],8,'application questions').map(question=>str(question,'Question',160));
+        check(new Set(questions).size===questions.length,'Use a different label for each question.');
+        const forms=state.settings.applicationForms??={};
+        check((forms[key]?.version??null)===(input.version??null),'This form changed. Reload it before saving.',409);
+        forms[key]={version:randomUUID(),intro:str(input.intro,'Application instructions',1200,false),questions};
+        state.settings.qualifications[key]={...state.settings.qualifications[key],reviewer,
+          applications:input.open===true,seasoned:input.seasoned===true};
+        return {};
+      }
       case 'application': {
         const qualificationKey=str(input.qualification,'Qualification',80);
         const qual=qualification(state,qualificationKey,ctx);
-        check(qual?.applications,'Applications are closed for this qualification.',403);
+        check(qual?.applications&&!['t1','t2'].includes(qualificationKey),'Applications are closed for this qualification.',403);
         check(!qual.seasoned || seasonedEligible(state,ctx,actor,member.roles),
           'Seasoned Member is required. Full Members qualify at ten attended operations.',403);
         check(!Object.values(state.applications).some(item=>item.member===actor&&item.qualification===qualificationKey&&
           ['pending','approved'].includes(item.status)), 'An application is already open or approved.',409);
-        const entry={id:randomUUID(),member:actor,qualification:qualificationKey,status:'pending',
-          note:str(input.note,'Application statement',1800),at:now()};
+        const form=state.settings.applicationForms?.[qualificationKey];
+        check((input.version??null)===(form?.version??null),'The application form changed. Reload before submitting.',409);
+        const questions=form?.questions??[];
+        const answers=list(input.answers??[],8,'application answers');
+        check(answers.length===questions.length,'Answer each application question.');
+        const entry={id:randomUUID(),member:actor,qualification:qualificationKey,status:'pending',at:now(),
+          note:str(input.note,'Application statement',1800,!questions.length),
+          responses:questions.map((question,index)=>({question,answer:str(answers[index],'Answer to question '+(index+1),1800)}))};
         state.applications[entry.id]=entry;
-        notice(state,'application:'+entry.id,'A qualification application is waiting for review. '+link('application-review'));
-        const reviewer=qual.reviewer||state.settings.roles[qual.specialty];
-        if (reviewer) for (const person of Object.values(ctx.members)) {
-          if (person.id!==actor && person.roleIds?.includes(reviewer)) notice(state,'application-review:'+entry.id+':'+person.id,
-            'A '+qual.name+' application is ready for your review. '+link('application-review'),'member',person.id);
+        const reviewUrl=link('application-review',{application:entry.id});
+        if (state.settings.channel) {
+          notice(state,'application:'+entry.id,'A '+qual.name+' application is waiting for review. '+reviewUrl);
         }
-        return {};
+        const reviewers=[qual.reviewer,state.settings.roles[qual.specialty]].filter(Boolean);
+        if (!reviewers.length && ctx.roles.cadre) reviewers.push(ctx.roles.cadre);
+        if (!state.settings.channel && ctx.roles.command) reviewers.push(ctx.roles.command);
+        for (const person of Object.values(ctx.members)) {
+          if (person.id!==actor && reviewers.some(role=>person.roleIds?.includes(role))) notice(state,'application-review:'+entry.id+':'+person.id,
+            'A '+qual.name+' application is ready for your review. '+reviewUrl,'member',person.id);
+        }
+        return {id:entry.id};
       }
       case 'review-application': {
         const entry=state.applications[id(input.id,'application')];
